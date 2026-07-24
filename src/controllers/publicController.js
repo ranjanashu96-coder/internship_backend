@@ -1,0 +1,2 @@
+import { Certificate, Student } from "../models/index.js"; import { asyncHandler } from "../utils/asyncHandler.js"; import { AppError, ok } from "../utils/response.js";
+export const verifyCertificate=asyncHandler(async(req,res)=>{const cert=await Certificate.findOne({where:{certificate_number:req.params.number},include:[{model:Student,required:false}]}).catch(()=>Certificate.findOne({where:{certificate_number:req.params.number}}));if(!cert)throw new AppError("Certificate not found",404);ok(res,cert,"Certificate verified");});
