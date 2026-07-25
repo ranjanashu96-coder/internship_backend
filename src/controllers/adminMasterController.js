@@ -1,4 +1,6 @@
 import { Op } from "sequelize";
+import fs from "fs";
+import path from "path";
 
 import {
   Sector,
@@ -54,6 +56,185 @@ const parsePositiveInteger = (
   }
 
   return number;
+};
+
+const CHAPTER_UPLOAD_ROOT =
+  path.resolve(
+    "uploads",
+    "chapters",
+  );
+
+const removeRequestFile = (
+  file,
+) => {
+  if (!file?.path) {
+    return;
+  }
+
+  fs.unlink(
+    file.path,
+    (error) => {
+      if (
+        error &&
+        error.code !== "ENOENT"
+      ) {
+        console.error(
+          "Failed to remove uploaded chapter file:",
+          error.message,
+        );
+      }
+    },
+  );
+};
+
+const resolveChapterFilePath = (
+  fileUrl,
+) => {
+  if (!fileUrl) {
+    return null;
+  }
+
+  const relativePath =
+    String(fileUrl)
+      .replace(
+        /^https?:\/\/[^/]+/i,
+        "",
+      )
+      .replace(/^\/+/, "");
+
+  const absolutePath =
+    path.resolve(
+      relativePath,
+    );
+
+  const insideChapterUploads =
+    absolutePath ===
+      CHAPTER_UPLOAD_ROOT ||
+    absolutePath.startsWith(
+      `${CHAPTER_UPLOAD_ROOT}${path.sep}`,
+    );
+
+  return insideChapterUploads
+    ? absolutePath
+    : null;
+};
+
+const removeStoredChapterFile = (
+  fileUrl,
+) => {
+  const absolutePath =
+    resolveChapterFilePath(
+      fileUrl,
+    );
+
+  if (!absolutePath) {
+    return;
+  }
+
+  fs.unlink(
+    absolutePath,
+    (error) => {
+      if (
+        error &&
+        error.code !== "ENOENT"
+      ) {
+        console.error(
+          "Failed to delete previous chapter file:",
+          error.message,
+        );
+      }
+    },
+  );
+};
+
+const validateExternalUrl = (
+  value,
+) => {
+  const urlValue =
+    String(value || "").trim();
+
+  if (!urlValue) {
+    throw new AppError(
+      "Content link is required",
+      422,
+    );
+  }
+
+  try {
+    const parsedUrl =
+      new URL(urlValue);
+
+    if (
+      ![
+        "http:",
+        "https:",
+      ].includes(
+        parsedUrl.protocol,
+      )
+    ) {
+      throw new Error(
+        "Invalid protocol",
+      );
+    }
+
+    return parsedUrl.toString();
+  } catch {
+    throw new AppError(
+      "Please provide a valid HTTP or HTTPS link",
+      422,
+    );
+  }
+};
+
+const validateChapterFile = (
+  contentType,
+  file,
+) => {
+  if (!file) {
+    throw new AppError(
+      `${
+        contentType === "pdf"
+          ? "PDF"
+          : contentType === "video"
+            ? "Video"
+            : "Text"
+      } file is required`,
+      422,
+    );
+  }
+
+  const allowedMimeTypes = {
+    pdf: [
+      "application/pdf",
+    ],
+
+    video: [
+      "video/mp4",
+      "video/webm",
+      "video/quicktime",
+    ],
+
+    text: [
+      "text/plain",
+    ],
+  };
+
+  const allowed =
+    allowedMimeTypes[
+      contentType
+    ];
+
+  if (
+    !allowed ||
+    !allowed.includes(
+      file.mimetype,
+    )
+  ) {
+    throw new AppError(
+      `Invalid file type for ${contentType} content`,
+      422,
+    );
+  }
 };
 
 /*
@@ -963,72 +1144,137 @@ export const deleteModule =
 */
 
 export const listChapters =
-  asyncHandler(async (req, res) => {
-    const {
-      page,
-      limit,
-      offset,
-    } = getPagination(req.query);
-
-    const where = {};
-
-    if (req.query.module_id) {
-      where.module_id =
-        req.query.module_id;
-    }
-
-    if (req.query.content_type) {
-      where.content_type =
-        req.query.content_type;
-    }
-
-    if (req.query.search) {
-      where.chapter_name = {
-        [Op.like]: `%${req.query.search.trim()}%`,
-      };
-    }
-
-    const result =
-      await Chapter.findAndCountAll({
-        where,
+  asyncHandler(
+    async (req, res) => {
+      const {
+        page,
         limit,
         offset,
-        order: [
-          ["module_id", "ASC"],
-          ["chapter_number", "ASC"],
-        ],
-        distinct: true,
-        include: [
+      } =
+        getPagination(
+          req.query,
+        );
+
+      const chapterWhere = {};
+      const moduleWhere = {};
+
+      if (
+        req.query.module_id
+      ) {
+        chapterWhere.module_id =
+          parsePositiveInteger(
+            req.query.module_id,
+            "Module ID",
+          );
+      }
+
+      if (
+        req.query.content_type
+      ) {
+        chapterWhere.content_type =
+          req.query.content_type;
+      }
+
+      if (req.query.search) {
+        chapterWhere.chapter_name =
           {
-            model: Module,
-            attributes: [
-              "id",
-              "module_number",
-              "module_name",
-              "domain_id",
+            [Op.like]:
+              `%${String(
+                req.query.search,
+              ).trim()}%`,
+          };
+      }
+
+      /*
+       * Chapter does not contain
+       * domain_id directly.
+       * Domain filter is applied
+       * through Module.domain_id.
+       */
+      if (
+        req.query.domain_id
+      ) {
+        moduleWhere.domain_id =
+          parsePositiveInteger(
+            req.query.domain_id,
+            "Domain ID",
+          );
+      }
+
+      const result =
+        await Chapter
+          .findAndCountAll({
+            where:
+              chapterWhere,
+
+            limit,
+            offset,
+
+            order: [
+              [
+                "module_id",
+                "ASC",
+              ],
+              [
+                "chapter_number",
+                "ASC",
+              ],
             ],
+
+            distinct: true,
+
             include: [
               {
-                model: Domain,
+                model: Module,
+
+                required:
+                  Boolean(
+                    req.query
+                      .domain_id,
+                  ),
+
+                where:
+                  Object.keys(
+                    moduleWhere,
+                  ).length > 0
+                    ? moduleWhere
+                    : undefined,
+
                 attributes: [
                   "id",
-                  "domain_name",
+                  "module_number",
+                  "module_name",
+                  "domain_id",
+                ],
+
+                include: [
+                  {
+                    model: Domain,
+
+                    attributes: [
+                      "id",
+                      "domain_name",
+                    ],
+
+                    required:
+                      false,
+                  },
                 ],
               },
             ],
-          },
-        ],
-      });
+          });
 
-    ok(
-      res,
-      paginationResponse(
-        result,
-        page,
-        limit,
-      ),
-    );
-  });
+      return ok(
+        res,
+        paginationResponse(
+          result,
+          page,
+          limit,
+        ),
+        "Chapters fetched successfully",
+      );
+    },
+  );
 
 export const getChapterById =
   asyncHandler(async (req, res) => {
@@ -1073,273 +1319,480 @@ export const getChapterById =
   });
 
 export const createChapter =
-  asyncHandler(async (req, res) => {
-    const {
-      module_id,
-      chapter_number,
-      content_type,
-    } = req.body;
-
-    const chapterName =
-      String(
-        req.body.chapter_name || "",
-      ).trim();
-
-    const contentUrl =
-      String(
-        req.body.content_url || "",
-      ).trim();
-
-    if (!module_id) {
-      throw new AppError(
-        "Module is required",
-        422,
-      );
-    }
-
-    if (!chapterName) {
-      throw new AppError(
-        "Chapter name is required",
-        422,
-      );
-    }
-
-    if (!contentUrl) {
-      throw new AppError(
-        "Content URL is required",
-        422,
-      );
-    }
-
-    const allowedContentTypes = [
-      "video",
-      "pdf",
-      "text",
-      "link",
-    ];
-
-    if (
-      !allowedContentTypes.includes(
-        content_type,
-      )
-    ) {
-      throw new AppError(
-        "Invalid content type",
-        422,
-      );
-    }
-
-    const chapterNumber =
-      parsePositiveInteger(
-        chapter_number,
-        "Chapter number",
-      );
-
-    const module =
-      await Module.findByPk(
-        module_id,
-      );
-
-    if (!module) {
-      throw new AppError(
-        "Module not found",
-        404,
-      );
-    }
-
-    const existing =
-      await Chapter.findOne({
-        where: {
+  asyncHandler(
+    async (req, res) => {
+      try {
+        const {
           module_id,
-          chapter_number:
-            chapterNumber,
-        },
-      });
+          domain_id,
+          chapter_number,
+          content_type,
+        } = req.body;
 
-    if (existing) {
-      throw new AppError(
-        "Chapter number already exists in this module",
-        409,
-      );
-    }
+        const chapterName =
+          String(
+            req.body
+              .chapter_name ||
+              "",
+          ).trim();
 
-    const chapter =
-      await Chapter.create({
-        module_id,
-        chapter_number:
-          chapterNumber,
-        chapter_name:
-          chapterName,
-        content_type,
-        content_url: contentUrl,
-      });
+        if (!module_id) {
+          throw new AppError(
+            "Module is required",
+            422,
+          );
+        }
 
-    ok(
-      res,
-      chapter,
-      "Chapter created successfully",
-      201,
-    );
-  });
+        if (!chapterName) {
+          throw new AppError(
+            "Chapter name is required",
+            422,
+          );
+        }
+
+        const allowedContentTypes =
+          [
+            "video",
+            "pdf",
+            "text",
+            "link",
+          ];
+
+        if (
+          !allowedContentTypes
+            .includes(
+              content_type,
+            )
+        ) {
+          throw new AppError(
+            "Invalid content type",
+            422,
+          );
+        }
+
+        const moduleId =
+          parsePositiveInteger(
+            module_id,
+            "Module ID",
+          );
+
+        const chapterNumber =
+          parsePositiveInteger(
+            chapter_number,
+            "Chapter number",
+          );
+
+        const module =
+          await Module.findByPk(
+            moduleId,
+          );
+
+        if (!module) {
+          throw new AppError(
+            "Module not found",
+            404,
+          );
+        }
+
+        /*
+         * Verify that selected module
+         * belongs to selected domain.
+         */
+        if (domain_id) {
+          const domainId =
+            parsePositiveInteger(
+              domain_id,
+              "Domain ID",
+            );
+
+          if (
+            Number(
+              module.domain_id,
+            ) !== domainId
+          ) {
+            throw new AppError(
+              "Selected module does not belong to the selected domain",
+              422,
+            );
+          }
+        }
+
+        const existing =
+          await Chapter.findOne({
+            where: {
+              module_id:
+                moduleId,
+
+              chapter_number:
+                chapterNumber,
+            },
+          });
+
+        if (existing) {
+          throw new AppError(
+            "Chapter number already exists in this module",
+            409,
+          );
+        }
+
+        let contentUrl;
+
+        if (
+          content_type ===
+          "link"
+        ) {
+          if (req.file) {
+            throw new AppError(
+              "File upload is not allowed for link content",
+              422,
+            );
+          }
+
+          contentUrl =
+            validateExternalUrl(
+              req.body
+                .content_url,
+            );
+        } else {
+          validateChapterFile(
+            content_type,
+            req.file,
+          );
+
+          contentUrl =
+            `/uploads/chapters/${req.file.filename}`;
+        }
+
+        const chapter =
+          await Chapter.create({
+            module_id:
+              moduleId,
+
+            chapter_number:
+              chapterNumber,
+
+            chapter_name:
+              chapterName,
+
+            content_type,
+
+            content_url:
+              contentUrl,
+          });
+
+        return ok(
+          res,
+          chapter,
+          "Chapter created successfully",
+          201,
+        );
+      } catch (error) {
+        removeRequestFile(
+          req.file,
+        );
+
+        throw error;
+      }
+    },
+  );
 
 export const updateChapter =
-  asyncHandler(async (req, res) => {
-    const chapter =
-      await Chapter.findByPk(
-        req.params.id,
-      );
+  asyncHandler(
+    async (req, res) => {
+      let newFileSaved =
+        false;
 
-    if (!chapter) {
-      throw new AppError(
-        "Chapter not found",
-        404,
-      );
-    }
+      try {
+        const chapter =
+          await Chapter.findByPk(
+            req.params.id,
+          );
 
-    const moduleId =
-      req.body.module_id ??
-      chapter.module_id;
+        if (!chapter) {
+          throw new AppError(
+            "Chapter not found",
+            404,
+          );
+        }
 
-    const chapterNumber =
-      req.body.chapter_number !==
-      undefined
-        ? parsePositiveInteger(
-            req.body.chapter_number,
-            "Chapter number",
+        const oldContentUrl =
+          chapter.content_url;
+
+        const moduleId =
+          req.body.module_id !==
+          undefined
+            ? parsePositiveInteger(
+                req.body
+                  .module_id,
+                "Module ID",
+              )
+            : Number(
+                chapter.module_id,
+              );
+
+        const chapterNumber =
+          req.body
+            .chapter_number !==
+          undefined
+            ? parsePositiveInteger(
+                req.body
+                  .chapter_number,
+                "Chapter number",
+              )
+            : Number(
+                chapter.chapter_number,
+              );
+
+        const chapterName =
+          req.body
+            .chapter_name !==
+          undefined
+            ? String(
+                req.body
+                  .chapter_name,
+              ).trim()
+            : chapter.chapter_name;
+
+        const contentType =
+          req.body
+            .content_type ||
+          chapter.content_type;
+
+        if (!chapterName) {
+          throw new AppError(
+            "Chapter name is required",
+            422,
+          );
+        }
+
+        if (
+          ![
+            "video",
+            "pdf",
+            "text",
+            "link",
+          ].includes(
+            contentType,
           )
-        : chapter.chapter_number;
+        ) {
+          throw new AppError(
+            "Invalid content type",
+            422,
+          );
+        }
 
-    const chapterName =
-      req.body.chapter_name !==
-      undefined
-        ? String(
-            req.body.chapter_name,
-          ).trim()
-        : chapter.chapter_name;
+        const module =
+          await Module.findByPk(
+            moduleId,
+          );
 
-    const contentType =
-      req.body.content_type ??
-      chapter.content_type;
+        if (!module) {
+          throw new AppError(
+            "Module not found",
+            404,
+          );
+        }
 
-    const contentUrl =
-      req.body.content_url !==
-      undefined
-        ? String(
-            req.body.content_url,
-          ).trim()
-        : chapter.content_url;
+        if (
+          req.body.domain_id
+        ) {
+          const domainId =
+            parsePositiveInteger(
+              req.body
+                .domain_id,
+              "Domain ID",
+            );
 
-    if (!chapterName) {
-      throw new AppError(
-        "Chapter name is required",
-        422,
-      );
-    }
+          if (
+            Number(
+              module.domain_id,
+            ) !== domainId
+          ) {
+            throw new AppError(
+              "Selected module does not belong to the selected domain",
+              422,
+            );
+          }
+        }
 
-    if (!contentUrl) {
-      throw new AppError(
-        "Content URL is required",
-        422,
-      );
-    }
+        const existing =
+          await Chapter.findOne({
+            where: {
+              module_id:
+                moduleId,
 
-    if (
-      ![
-        "video",
-        "pdf",
-        "text",
-        "link",
-      ].includes(contentType)
-    ) {
-      throw new AppError(
-        "Invalid content type",
-        422,
-      );
-    }
+              chapter_number:
+                chapterNumber,
 
-    const module =
-      await Module.findByPk(
-        moduleId,
-      );
+              id: {
+                [Op.ne]:
+                  chapter.id,
+              },
+            },
+          });
 
-    if (!module) {
-      throw new AppError(
-        "Module not found",
-        404,
-      );
-    }
+        if (existing) {
+          throw new AppError(
+            "Chapter number already exists in this module",
+            409,
+          );
+        }
 
-    const existing =
-      await Chapter.findOne({
-        where: {
-          module_id: moduleId,
+        let contentUrl =
+          oldContentUrl;
+
+        if (
+          contentType ===
+          "link"
+        ) {
+          if (req.file) {
+            throw new AppError(
+              "File upload is not allowed for link content",
+              422,
+            );
+          }
+
+          const submittedUrl =
+            String(
+              req.body
+                .content_url ||
+                "",
+            ).trim();
+
+          if (submittedUrl) {
+            contentUrl =
+              validateExternalUrl(
+                submittedUrl,
+              );
+          } else if (
+            chapter.content_type !==
+            "link"
+          ) {
+            throw new AppError(
+              "Content link is required",
+              422,
+            );
+          }
+        } else if (req.file) {
+          validateChapterFile(
+            contentType,
+            req.file,
+          );
+
+          contentUrl =
+            `/uploads/chapters/${req.file.filename}`;
+
+          newFileSaved = true;
+        } else if (
+          chapter.content_type ===
+            "link" ||
+          chapter.content_type !==
+            contentType
+        ) {
+          throw new AppError(
+            `Upload a ${contentType} file`,
+            422,
+          );
+        }
+
+        await chapter.update({
+          module_id:
+            moduleId,
+
           chapter_number:
             chapterNumber,
-          id: {
-            [Op.ne]: chapter.id,
-          },
-        },
-      });
 
-    if (existing) {
-      throw new AppError(
-        "Chapter number already exists in this module",
-        409,
-      );
-    }
+          chapter_name:
+            chapterName,
 
-    await chapter.update({
-      module_id: moduleId,
-      chapter_number:
-        chapterNumber,
-      chapter_name: chapterName,
-      content_type: contentType,
-      content_url: contentUrl,
-    });
+          content_type:
+            contentType,
 
-    ok(
-      res,
-      chapter,
-      "Chapter updated successfully",
-    );
-  });
+          content_url:
+            contentUrl,
+        });
+
+        /*
+         * Delete the previous uploaded
+         * file after successful update.
+         */
+        if (
+          oldContentUrl !==
+          contentUrl
+        ) {
+          removeStoredChapterFile(
+            oldContentUrl,
+          );
+        }
+
+        return ok(
+          res,
+          chapter,
+          "Chapter updated successfully",
+        );
+      } catch (error) {
+        if (
+          req.file &&
+          !newFileSaved
+        ) {
+          removeRequestFile(
+            req.file,
+          );
+        }
+
+        throw error;
+      }
+    },
+  );
 
 export const deleteChapter =
-  asyncHandler(async (req, res) => {
-    const chapter =
-      await Chapter.findByPk(
-        req.params.id,
+  asyncHandler(
+    async (req, res) => {
+      const chapter =
+        await Chapter.findByPk(
+          req.params.id,
+        );
+
+      if (!chapter) {
+        throw new AppError(
+          "Chapter not found",
+          404,
+        );
+      }
+
+      const assignmentCount =
+        await Assignment.count({
+          where: {
+            chapter_id:
+              chapter.id,
+          },
+        });
+
+      if (
+        assignmentCount > 0
+      ) {
+        throw new AppError(
+          "Chapter cannot be deleted because assignments are linked to it",
+          409,
+        );
+      }
+
+      const contentUrl =
+        chapter.content_url;
+
+      await chapter.destroy();
+
+      removeStoredChapterFile(
+        contentUrl,
       );
 
-    if (!chapter) {
-      throw new AppError(
-        "Chapter not found",
-        404,
+      return ok(
+        res,
+        {},
+        "Chapter deleted successfully",
       );
-    }
-
-    const assignmentCount =
-      await Assignment.count({
-        where: {
-          chapter_id: chapter.id,
-        },
-      });
-
-    if (assignmentCount > 0) {
-      throw new AppError(
-        "Chapter cannot be deleted because assignments are linked to it",
-        409,
-      );
-    }
-
-    await chapter.destroy();
-
-    ok(
-      res,
-      {},
-      "Chapter deleted successfully",
-    );
-  });
+    },
+  );
 
 /*
 |--------------------------------------------------------------------------

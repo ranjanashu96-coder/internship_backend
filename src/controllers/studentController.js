@@ -1,4 +1,6 @@
 import { Op } from "sequelize";
+import fs from "fs";
+import path from "path";
 
 import {
   Student,
@@ -15,6 +17,7 @@ import {
   InternshipReport,
   Certificate,
   Payment,
+  GeneratedDocument,
 } from "../models/index.js";
 
 import {
@@ -938,6 +941,186 @@ export const getProfile = asyncHandler(
     });
   },
 );
+
+export const getDocuments =
+  asyncHandler(async (req, res) => {
+    const student =
+      await getCurrentStudent(req);
+
+    const documents =
+      await GeneratedDocument.findAll({
+        where: {
+          student_id:
+            student.id,
+        },
+
+        attributes: [
+          "id",
+          "student_id",
+          "type",
+          "file_url",
+          "generated_at",
+          "metadata_json",
+        ],
+
+        order: [
+          [
+            "generated_at",
+            "DESC",
+          ],
+          ["id", "DESC"],
+        ],
+      });
+
+    return ok(
+      res,
+      {
+        documents:
+          documents.map(
+            (document) => ({
+              id:
+                document.id,
+
+              type:
+                document.type,
+
+              file_url:
+                document.file_url,
+
+              generated_at:
+                document.generated_at,
+
+              metadata:
+                document.metadata_json,
+
+              download_url:
+                `/student/documents/${document.id}/download`,
+            }),
+          ),
+
+        total:
+          documents.length,
+      },
+      "Student documents fetched successfully",
+    );
+  });
+
+  /**
+ * GET /student/documents/:documentId/download
+ */
+export const downloadDocument =
+  asyncHandler(async (req, res) => {
+    const student =
+      await getCurrentStudent(req);
+
+    const documentId =
+      Number(
+        req.params.documentId,
+      );
+
+    if (
+      !Number.isInteger(
+        documentId,
+      ) ||
+      documentId <= 0
+    ) {
+      throw new AppError(
+        "Invalid document id",
+        422,
+      );
+    }
+
+    const document =
+      await GeneratedDocument.findOne({
+        where: {
+          id:
+            documentId,
+
+          student_id:
+            student.id,
+        },
+      });
+
+    if (!document) {
+      throw new AppError(
+        "Document not found",
+        404,
+      );
+    }
+
+    const relativePath =
+      String(
+        document.file_url ||
+          "",
+      )
+        .replace(
+          /^https?:\/\/[^/]+/i,
+          "",
+        )
+        .replace(
+          /^\/+/,
+          "",
+        );
+
+    if (!relativePath) {
+      throw new AppError(
+        "Document file is not available",
+        404,
+      );
+    }
+
+    const absolutePath =
+      path.resolve(
+        process.cwd(),
+        relativePath,
+      );
+
+    const uploadsRoot =
+      path.resolve(
+        process.cwd(),
+        "uploads",
+      );
+
+    const validPath =
+      absolutePath ===
+        uploadsRoot ||
+      absolutePath.startsWith(
+        `${uploadsRoot}${path.sep}`,
+      );
+
+    if (!validPath) {
+      throw new AppError(
+        "Invalid document file path",
+        400,
+      );
+    }
+
+    if (
+      !fs.existsSync(
+        absolutePath,
+      )
+    ) {
+      throw new AppError(
+        "Document file does not exist on server",
+        404,
+      );
+    }
+
+    const label =
+      String(document.type)
+        .replaceAll(
+          "_",
+          "-",
+        );
+
+    const filename =
+      `${label}-${student.registration_number}.pdf`;
+
+    return res.download(
+      absolutePath,
+      filename,
+    );
+  });
 
 /**
  * PUT /student/profile

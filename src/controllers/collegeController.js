@@ -40,6 +40,798 @@ const getCollegeId = (req) => {
   return collegeId;
 };
 
+const toNumber = (value) => {
+  const parsedValue =
+    Number(value);
+
+  return Number.isFinite(
+    parsedValue,
+  )
+    ? parsedValue
+    : 0;
+};
+
+const calculatePercentage = (
+  value,
+  total,
+) => {
+  const valueNumber =
+    toNumber(value);
+
+  const totalNumber =
+    toNumber(total);
+
+  if (totalNumber <= 0) {
+    return 0;
+  }
+
+  return Number(
+    (
+      (valueNumber /
+        totalNumber) *
+      100
+    ).toFixed(2),
+  );
+};
+
+const getMonthKey = (date) => {
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1,
+    ).padStart(2, "0");
+
+  return `${year}-${month}`;
+};
+
+/**
+ * GET /college/dashboard
+ */
+export const dashboard =
+  asyncHandler(
+    async (req, res) => {
+      const collegeId =
+        getCollegeId(req);
+
+      const college =
+        await College.findByPk(
+          collegeId,
+          {
+            attributes: [
+              "id",
+              "name",
+              "code",
+              "university",
+              "principal_name",
+              "coordinator_name",
+              "email",
+              "mobile",
+              "address",
+              "state",
+              "district",
+              "pincode",
+              "logo",
+              "college_share",
+              "rknexora_share",
+              "status",
+            ],
+          },
+        );
+
+      if (!college) {
+        throw new AppError(
+          "College not found",
+          404,
+        );
+      }
+
+      /*
+       * Only fetch students belonging
+       * to the authenticated college.
+       */
+      const studentRows =
+        await Student.findAll({
+          where: {
+            college_id:
+              collegeId,
+          },
+
+          attributes: [
+            "id",
+            "registration_number",
+            "student_id",
+            "name",
+            "email",
+            "mobile",
+            "programme",
+            "major_subject",
+            "session",
+            "semester",
+            "domain_id",
+            "mentor_id",
+            "internship_status",
+            "payment_status",
+            "total_progress",
+            "registration_date",
+            "created_at",
+          ],
+
+          include: [
+            {
+              model: Domain,
+              as: "domain",
+
+              attributes: [
+                "id",
+                "domain_name",
+                "fee",
+                "duration_hours",
+              ],
+
+              required: false,
+            },
+          ],
+
+          order: [
+            [
+              "created_at",
+              "DESC",
+            ],
+            ["id", "DESC"],
+          ],
+        });
+
+      const students =
+        studentRows.map(
+          (student) =>
+            student.toJSON(),
+        );
+
+      const studentIds =
+        students.map(
+          (student) =>
+            Number(student.id),
+        );
+
+      const certificateCount =
+        studentIds.length > 0
+          ? await Certificate.count({
+              where: {
+                student_id: {
+                  [Op.in]:
+                    studentIds,
+                },
+              },
+            })
+          : 0;
+
+      /*
+       * Student status summary.
+       */
+      const studentStatus = {
+        preloaded: 0,
+        registered: 0,
+        active: 0,
+        completed: 0,
+        blocked: 0,
+      };
+
+      /*
+       * Payment status summary.
+       */
+      const paymentStatus = {
+        pending: 0,
+        paid: 0,
+        failed: 0,
+        refunded: 0,
+      };
+
+      let assignedStudents = 0;
+      let unassignedStudents = 0;
+
+      let totalProgress = 0;
+      let paidRevenue = 0;
+
+      const domainMap =
+        new Map();
+
+      const sessionMap =
+        new Map();
+
+      const progressDistribution = {
+        not_started: 0,
+        up_to_25: 0,
+        up_to_50: 0,
+        up_to_75: 0,
+        up_to_99: 0,
+        completed: 0,
+      };
+
+      for (
+        const student of
+        students
+      ) {
+        /*
+         * Student status counting.
+         */
+        if (
+          Object.prototype
+            .hasOwnProperty.call(
+              studentStatus,
+              student.internship_status,
+            )
+        ) {
+          studentStatus[
+            student.internship_status
+          ] += 1;
+        }
+
+        /*
+         * Payment status counting.
+         */
+        if (
+          Object.prototype
+            .hasOwnProperty.call(
+              paymentStatus,
+              student.payment_status,
+            )
+        ) {
+          paymentStatus[
+            student.payment_status
+          ] += 1;
+        }
+
+        /*
+         * Mentor assignment counting.
+         */
+        if (student.mentor_id) {
+          assignedStudents += 1;
+        } else {
+          unassignedStudents +=
+            1;
+        }
+
+        /*
+         * Progress calculation.
+         */
+        const progress =
+          Math.min(
+            100,
+            Math.max(
+              0,
+              toNumber(
+                student.total_progress,
+              ),
+            ),
+          );
+
+        totalProgress +=
+          progress;
+
+        if (progress <= 0) {
+          progressDistribution
+            .not_started += 1;
+        } else if (
+          progress <= 25
+        ) {
+          progressDistribution
+            .up_to_25 += 1;
+        } else if (
+          progress <= 50
+        ) {
+          progressDistribution
+            .up_to_50 += 1;
+        } else if (
+          progress <= 75
+        ) {
+          progressDistribution
+            .up_to_75 += 1;
+        } else if (
+          progress < 100
+        ) {
+          progressDistribution
+            .up_to_99 += 1;
+        } else {
+          progressDistribution
+            .completed += 1;
+        }
+
+        /*
+         * Revenue is calculated from
+         * domain fee for paid students.
+         */
+        if (
+          student.payment_status ===
+          "paid"
+        ) {
+          paidRevenue +=
+            toNumber(
+              student.domain?.fee,
+            );
+        }
+
+        /*
+         * Domain distribution.
+         */
+        const domainId =
+          student.domain?.id ??
+          student.domain_id ??
+          0;
+
+        const domainName =
+          student.domain
+            ?.domain_name ??
+          "Domain Not Selected";
+
+        const existingDomain =
+          domainMap.get(
+            Number(domainId),
+          );
+
+        if (existingDomain) {
+          existingDomain.student_count +=
+            1;
+        } else {
+          domainMap.set(
+            Number(domainId),
+            {
+              domain_id:
+                Number(domainId),
+
+              domain_name:
+                domainName,
+
+              student_count:
+                1,
+            },
+          );
+        }
+
+        /*
+         * Session distribution.
+         */
+        const session =
+          String(
+            student.session ||
+              "Not Available",
+          );
+
+        sessionMap.set(
+          session,
+          (
+            sessionMap.get(
+              session,
+            ) || 0
+          ) + 1,
+        );
+      }
+
+      const totalStudents =
+        students.length;
+
+      const pendingStudents =
+        studentStatus.preloaded +
+        studentStatus.registered;
+
+      const averageProgress =
+        totalStudents > 0
+          ? Number(
+              (
+                totalProgress /
+                totalStudents
+              ).toFixed(2),
+            )
+          : 0;
+
+      const completionRate =
+        calculatePercentage(
+          studentStatus.completed,
+          totalStudents,
+        );
+
+      const paymentRate =
+        calculatePercentage(
+          paymentStatus.paid,
+          totalStudents,
+        );
+
+      const mentorAssignmentRate =
+        calculatePercentage(
+          assignedStudents,
+          totalStudents,
+        );
+
+      const certificateRate =
+        calculatePercentage(
+          certificateCount,
+          totalStudents,
+        );
+
+      /*
+       * Last 12 months registration
+       * chart.
+       */
+      const currentDate =
+        new Date();
+
+      const monthMap =
+        new Map();
+
+      const monthlyRegistrations =
+        Array.from(
+          {
+            length: 12,
+          },
+          (_, index) => {
+            const date =
+              new Date(
+                currentDate
+                  .getFullYear(),
+
+                currentDate
+                  .getMonth() -
+                  11 +
+                  index,
+
+                1,
+              );
+
+            const key =
+              getMonthKey(date);
+
+            const monthItem = {
+              key,
+
+              month:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month:
+                      "short",
+                  },
+                ),
+
+              year:
+                date.getFullYear(),
+
+              label:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month:
+                      "short",
+                    year:
+                      "numeric",
+                  },
+                ),
+
+              registrations: 0,
+            };
+
+            monthMap.set(
+              key,
+              monthItem,
+            );
+
+            return monthItem;
+          },
+        );
+
+      for (
+        const student of
+        students
+      ) {
+        const registrationValue =
+          student.registration_date ||
+          student.created_at;
+
+        if (!registrationValue) {
+          continue;
+        }
+
+        const registrationDate =
+          new Date(
+            registrationValue,
+          );
+
+        if (
+          Number.isNaN(
+            registrationDate
+              .getTime(),
+          )
+        ) {
+          continue;
+        }
+
+        const month =
+          monthMap.get(
+            getMonthKey(
+              registrationDate,
+            ),
+          );
+
+        if (month) {
+          month.registrations +=
+            1;
+        }
+      }
+
+      const domainDistribution =
+        Array.from(
+          domainMap.values(),
+        ).sort(
+          (first, second) =>
+            second.student_count -
+            first.student_count,
+        );
+
+      const sessionDistribution =
+        Array.from(
+          sessionMap.entries(),
+        )
+          .map(
+            ([
+              session,
+              studentCount,
+            ]) => ({
+              session,
+
+              student_count:
+                studentCount,
+            }),
+          )
+          .sort(
+            (first, second) =>
+              second.student_count -
+              first.student_count,
+          );
+
+      const recentStudents =
+        students
+          .slice(0, 8)
+          .map(
+            (student) => ({
+              id:
+                student.id,
+
+              registration_number:
+                student.registration_number,
+
+              student_id:
+                student.student_id,
+
+              name:
+                student.name,
+
+              email:
+                student.email,
+
+              mobile:
+                student.mobile,
+
+              programme:
+                student.programme,
+
+              major_subject:
+                student.major_subject,
+
+              session:
+                student.session,
+
+              semester:
+                student.semester,
+
+              internship_status:
+                student.internship_status,
+
+              payment_status:
+                student.payment_status,
+
+              total_progress:
+                toNumber(
+                  student.total_progress,
+                ),
+
+              mentor_assigned:
+                Boolean(
+                  student.mentor_id,
+                ),
+
+              registered_at:
+                student.registration_date ||
+                student.created_at,
+
+              domain:
+                student.domain
+                  ? {
+                      id:
+                        student.domain.id,
+
+                      domain_name:
+                        student.domain
+                          .domain_name,
+
+                      fee:
+                        toNumber(
+                          student.domain
+                            .fee,
+                        ),
+
+                      duration_hours:
+                        toNumber(
+                          student.domain
+                            .duration_hours,
+                        ),
+                    }
+                  : null,
+            }),
+          );
+
+      return ok(
+        res,
+        {
+          college: {
+            id:
+              college.id,
+
+            name:
+              college.name,
+
+            code:
+              college.code,
+
+            university:
+              college.university,
+
+            principal_name:
+              college.principal_name,
+
+            coordinator_name:
+              college.coordinator_name,
+
+            email:
+              college.email,
+
+            mobile:
+              college.mobile,
+
+            address:
+              college.address,
+
+            state:
+              college.state,
+
+            district:
+              college.district,
+
+            pincode:
+              college.pincode,
+
+            logo:
+              college.logo,
+
+            status:
+              college.status,
+          },
+
+          summary: {
+            total_students:
+              totalStudents,
+
+            active_students:
+              studentStatus.active,
+
+            completed_students:
+              studentStatus.completed,
+
+            pending_students:
+              pendingStudents,
+
+            preloaded_students:
+              studentStatus.preloaded,
+
+            registered_students:
+              studentStatus.registered,
+
+            blocked_students:
+              studentStatus.blocked,
+
+            paid_students:
+              paymentStatus.paid,
+
+            pending_payments:
+              paymentStatus.pending,
+
+            failed_payments:
+              paymentStatus.failed,
+
+            refunded_payments:
+              paymentStatus.refunded,
+
+            assigned_students:
+              assignedStudents,
+
+            unassigned_students:
+              unassignedStudents,
+
+            certificates_generated:
+              certificateCount,
+
+            average_progress:
+              averageProgress,
+
+            completion_rate:
+              completionRate,
+
+            payment_rate:
+              paymentRate,
+
+            mentor_assignment_rate:
+              mentorAssignmentRate,
+
+            certificate_rate:
+              certificateRate,
+
+            estimated_revenue:
+              Number(
+                paidRevenue.toFixed(
+                  2,
+                ),
+              ),
+
+            college_share_amount:
+              Number(
+                (
+                  paidRevenue *
+                  (
+                    toNumber(
+                      college.college_share,
+                    ) / 100
+                  )
+                ).toFixed(2),
+              ),
+
+            rknexora_share_amount:
+              Number(
+                (
+                  paidRevenue *
+                  (
+                    toNumber(
+                      college.rknexora_share,
+                    ) / 100
+                  )
+                ).toFixed(2),
+              ),
+          },
+
+          student_status:
+            studentStatus,
+
+          payment_status:
+            paymentStatus,
+
+          progress_distribution:
+            progressDistribution,
+
+          monthly_registrations:
+            monthlyRegistrations,
+
+          domain_distribution:
+            domainDistribution,
+
+          session_distribution:
+            sessionDistribution,
+
+          recent_students:
+            recentStudents,
+        },
+        "College dashboard fetched successfully",
+      );
+    },
+  );
+
 export const getProfile = asyncHandler(
   async (req, res) => {
     const collegeId = getCollegeId(req);

@@ -54,28 +54,76 @@ export const authenticate = async (req, _res, next) => {
 
       return next();
     }
+if (payload.role === "mentor") {
+  /*
+   * Token ID belongs to the users table.
+   */
+  const user = await User.findByPk(
+    payload.id,
+  );
 
-    if (payload.role === "mentor") {
-      const mentor = await Mentor.findByPk(payload.id);
+  if (
+    !user ||
+    user.role !== "mentor" ||
+    user.status !== "active"
+  ) {
+    return next(
+      new AppError(
+        "Mentor login account is invalid or inactive",
+        401,
+      ),
+    );
+  }
 
-      if (!mentor || mentor.status !== "active") {
-        return next(
-          new AppError(
-            "Mentor account is invalid or inactive",
-            401,
-          ),
-        );
-      }
+  /*
+   * Resolve the actual mentor profile using the login email.
+   */
+  const mentor =
+    await Mentor.findOne({
+      where: {
+        email: user.email,
+      },
+    });
 
-      req.user = {
-        id: mentor.id,
-        role: "mentor",
-        name: mentor.name,
-        email: mentor.email,
-      };
+  if (
+    !mentor ||
+    mentor.status !== "active"
+  ) {
+    return next(
+      new AppError(
+        "Mentor profile is invalid or inactive",
+        401,
+      ),
+    );
+  }
 
-      return next();
-    }
+  req.user = {
+    /*
+     * This ID belongs to the mentors table.
+     */
+    id: mentor.id,
+
+    /*
+     * This ID belongs to the users table.
+     */
+    user_id: user.id,
+
+    role: "mentor",
+    name: mentor.name,
+    email: mentor.email,
+    employee_id:
+      mentor.employee_id,
+    domain_id:
+      mentor.domain_id,
+    college_id:
+      mentor.college_id,
+    status: mentor.status,
+  };
+
+  req.mentor = mentor;
+
+  return next();
+}
 
     const user = await User.findByPk(payload.id);
 

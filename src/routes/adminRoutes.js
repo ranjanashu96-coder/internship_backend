@@ -51,6 +51,7 @@ import {
   update,
   remove,
 
+  getAdminDashboard,
   createCollege,
   updateCollege,
   approveCollege,
@@ -76,6 +77,11 @@ router.use(authenticate, isAdmin);
 | Dashboard
 |--------------------------------------------------------------------------
 */
+
+router.get(
+  "/dashboard",
+  getAdminDashboard,
+);
 
 // router.get("/dashboard", adminDashboard);
 
@@ -198,12 +204,50 @@ router.delete("/modules/:id", deleteModule);
 |--------------------------------------------------------------------------
 */
 
-router.get("/chapters", listChapters);
-router.get("/chapters/:id", getChapterById);
-router.post("/chapters", createChapter);
-router.put("/chapters/:id", updateChapter);
-router.delete("/chapters/:id", deleteChapter);
+/*
+|--------------------------------------------------------------------------
+| Chapters
+|--------------------------------------------------------------------------
+*/
 
+const chapterUpload =
+  upload(
+    "chapters",
+    [
+      "application/pdf",
+      "video/mp4",
+      "video/webm",
+      "video/quicktime",
+      "text/plain",
+    ],
+  );
+
+router.get(
+  "/chapters",
+  listChapters,
+);
+
+router.get(
+  "/chapters/:id",
+  getChapterById,
+);
+
+router.post(
+  "/chapters",
+  chapterUpload.single("file"),
+  createChapter,
+);
+
+router.put(
+  "/chapters/:id",
+  chapterUpload.single("file"),
+  updateChapter,
+);
+
+router.delete(
+  "/chapters/:id",
+  deleteChapter,
+);
 /*
 |--------------------------------------------------------------------------
 | Assignments

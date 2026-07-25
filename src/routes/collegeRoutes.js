@@ -19,11 +19,17 @@ import {
   downloadAllCertificates,
    studentsWithCertificates,
   downloadStudentCertificate,
+  dashboard,
 } from "../controllers/collegeController.js";
 
 const router = Router();
 
 router.use(authenticate, isCollege);
+
+router.get(
+  "/dashboard",
+  dashboard,
+);
 
 router.get(
   "/profile",

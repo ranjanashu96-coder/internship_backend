@@ -1,4 +1,7 @@
 import PDFDocument from "pdfkit";
+import axios from "axios";
+import crypto from "crypto";
+import { Op } from "sequelize";
 import {
   Domain,
   Payment,
@@ -15,6 +18,37 @@ import {
 import {
   hashPassword,
 } from "../utils/security.js";
+
+import {
+  getCashfreeBaseUrl,
+  getCashfreeHeaders,
+  verifyCashfreeWebhookSignature,
+} from "../config/cashfree.js";
+
+const normalizeMobileNumber = (
+  value,
+) => {
+  const digits = String(
+    value || "",
+  ).replace(/\D/g, "");
+
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+
+  return "";
+};
+
+const createCashfreeOrderId = (
+  studentId,
+) => {
+  const randomValue =
+    crypto
+      .randomBytes(4)
+      .toString("hex");
+
+  return `RKN_${studentId}_${Date.now()}_${randomValue}`;
+};
 
 const parseJsonObject = (value) => {
   if (!value) {
@@ -705,37 +739,37 @@ export const lockRegistration =
     );
   });
 
-export const createPaymentOrder =
-  asyncHandler(async (req, res) => {
-    const studentId =
-      Number(req.body.student_id);
+export const createPaymentOrder = asyncHandler(
+  async (req, res) => {
+    const studentId = Number(
+      req.body.student_id ||
+        req.user?.student_id ||
+        req.user?.id,
+    );
 
     if (!studentId) {
       throw new AppError(
-        "Student ID is required",
+        "Student is required",
         422,
       );
     }
 
-    const student =
-      await Student.findByPk(
-        studentId,
-        {
-          include: [
-            {
-              model: Domain,
-              as: "domain",
-              required: false,
-              attributes: [
-                "id",
-                "domain_name",
-                "fee",
-                "duration_hours",
-              ],
-            },
-          ],
-        },
-      );
+    const student = await Student.findByPk(
+      studentId,
+      {
+        include: [
+          {
+            model: Domain,
+            as: "domain",
+            attributes: [
+              "id",
+              "domain_name",
+              "fee",
+            ],
+          },
+        ],
+      },
+    );
 
     if (!student) {
       throw new AppError(
@@ -745,257 +779,810 @@ export const createPaymentOrder =
     }
 
     if (
+      student.internship_status ===
+      "blocked"
+    ) {
+      throw new AppError(
+        "This registration is blocked",
+        403,
+      );
+    }
+
+    if (!student.registration_locked) {
+      throw new AppError(
+        "Confirm and lock registration before payment",
+        409,
+      );
+    }
+
+    if (
       student.payment_status === "paid"
     ) {
       throw new AppError(
-        "Payment is already completed.",
-        409,
-      );
-    }
-
-    if (
-      student.internship_status !==
-      "registered"
-    ) {
-      throw new AppError(
-        "Complete registration details first.",
-        409,
-      );
-    }
-
-    if (
-      !student.registration_locked
-    ) {
-      throw new AppError(
-        "Review and confirm your registration before payment.",
-        409,
-      );
-    }
-
-    if (!student.domain_id) {
-      throw new AppError(
-        "Internship domain is not selected.",
+        "Payment has already been completed",
         409,
       );
     }
 
     if (!student.domain) {
       throw new AppError(
-        "Selected internship domain was not found.",
-        404,
+        "Student domain is not assigned",
+        422,
       );
     }
 
-    const documents =
-      getStudentDocuments(student);
-
-    if (
-      !areDocumentsComplete(
-        documents,
-      )
-    ) {
-      throw new AppError(
-        "Required documents are incomplete.",
-        409,
-      );
-    }
-
-    const amount =
-      Number(student.domain.fee);
+    const amount = Number(
+      student.domain.fee,
+    );
 
     if (
       !Number.isFinite(amount) ||
       amount <= 0
     ) {
       throw new AppError(
-        "A valid fee is not configured for the selected domain.",
-        409,
-      );
-    }
-
-    const existingPayment =
-      await Payment.findOne({
-        where: {
-          student_id:
-            student.id,
-
-          status:
-            "created",
-        },
-        order: [
-          ["id", "DESC"],
-        ],
-      });
-
-    if (existingPayment) {
-      return ok(
-        res,
-        {
-          payment_id:
-            existingPayment.id,
-
-          transaction_id:
-            existingPayment.transaction_id,
-
-          student_id:
-            student.id,
-
-          amount:
-            Number(
-              existingPayment.amount,
-            ),
-
-          domain: {
-            id:
-              student.domain.id,
-
-            domain_name:
-              student.domain.domain_name,
-          },
-        },
-        "Existing payment order retrieved",
-      );
-    }
-
-    const transactionId =
-      `RKN-${Date.now()}-${student.id}`;
-
-    const payment =
-      await Payment.create({
-        student_id:
-          student.id,
-
-        amount,
-
-        transaction_id:
-          transactionId,
-
-        status:
-          "created",
-      });
-
-    return ok(
-      res,
-      {
-        payment_id:
-          payment.id,
-
-        transaction_id:
-          transactionId,
-
-        student_id:
-          student.id,
-
-        amount,
-
-        domain: {
-          id:
-            student.domain.id,
-
-          domain_name:
-            student.domain.domain_name,
-        },
-      },
-      "Payment order created",
-    );
-  });
-
-export const simulatePaymentSuccess =
-  asyncHandler(async (req, res) => {
-    const transactionId = String(
-      req.body.transaction_id || "",
-    ).trim();
-
-    if (!transactionId) {
-      throw new AppError(
-        "Transaction ID is required",
+        "Invalid domain fee",
         422,
       );
     }
 
-    const payment = await Payment.findOne({
-      where: {
-        transaction_id: transactionId,
+    const customerPhone =
+      normalizeMobileNumber(
+        student.mobile,
+      );
+
+    if (!customerPhone) {
+      throw new AppError(
+        "Valid 10-digit mobile number is required",
+        422,
+      );
+    }
+
+    const customerEmail = String(
+      student.email || "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (!customerEmail) {
+      throw new AppError(
+        "Student email is required",
+        422,
+      );
+    }
+
+    const frontendUrl =
+      process.env.CLIENT_URL;
+
+    const backendUrl =
+      process.env.BACKEND_URL;
+
+    if (!frontendUrl || !backendUrl) {
+      throw new AppError(
+        "CLIENT_URL or BACKEND_URL is not configured",
+        500,
+      );
+    }
+
+    const orderId =
+      createCashfreeOrderId(
+        student.id,
+      );
+
+    const payload = {
+      order_id: orderId,
+      order_amount: Number(
+        amount.toFixed(2),
+      ),
+      order_currency: "INR",
+
+      customer_details: {
+        customer_id:
+          `STUDENT_${student.id}`,
+
+        customer_name:
+          student.name || "Student",
+
+        customer_email:
+          customerEmail,
+
+        customer_phone:
+          customerPhone,
       },
-    });
 
-    if (!payment) {
-      throw new AppError(
-        "Payment order not found",
-        404,
+      order_meta: {
+        return_url:
+          `${frontendUrl}/register/payment/status` +
+          `?order_id=${encodeURIComponent(orderId)}` +
+          `&student_id=${student.id}`,
+
+        notify_url:
+          `${backendUrl}/api/registration/payment/cashfree/webhook`,
+      },
+
+      order_note:
+        `Internship payment for ${student.domain.domain_name}`,
+
+      order_tags: {
+        student_id:
+          String(student.id),
+
+        registration_number:
+          String(
+            student.registration_number ||
+              "",
+          ),
+
+        domain_id:
+          String(student.domain.id),
+      },
+    };
+
+    let cashfreeOrder;
+
+    try {
+      const response =
+        await axios.post(
+          `${getCashfreeBaseUrl()}/orders`,
+          payload,
+          {
+            headers: getCashfreeHeaders({
+              "x-idempotency-key": crypto.randomUUID(),
+              "x-request-id": crypto.randomUUID(),
+            }),
+
+            timeout: 20000,
+          },
+        );
+
+      cashfreeOrder = response.data;
+    } catch (error) {
+      console.error(
+        "Cashfree order error:",
+        error.response?.data ||
+          error.message,
       );
-    }
 
-    const student = await Student.findByPk(
-      payment.student_id,
-    );
-
-    if (!student) {
       throw new AppError(
-        "Student not found",
-        404,
-      );
-    }
-
-    if (!student.registration_locked) {
-      throw new AppError(
-        "Registration must be confirmed before payment",
-        409,
+        error.response?.data?.message ||
+          "Unable to create payment order",
+        error.response?.status || 500,
       );
     }
 
     if (
-      payment.status === "success" &&
-      student.payment_status === "paid"
+      !cashfreeOrder
+        ?.payment_session_id
     ) {
-      return ok(
-        res,
-        {
-          student_id: student.id,
-          transaction_id:
-            payment.transaction_id,
-          payment_status: "paid",
-          internship_status: "active",
-          registration_locked: true,
-          next_step: "login",
-        },
-        "Payment was already completed",
+      throw new AppError(
+        "Cashfree payment session was not generated",
+        500,
       );
     }
 
-    await payment.update({
-      status: "success",
+    const transactionId =
+      `CF_${student.id}_${Date.now()}`;
 
-      gateway_payload: {
-        ...req.body,
-        simulated: true,
-        paid_at:
-          new Date().toISOString(),
-      },
-    });
-
-    await student.update({
-      payment_status: "paid",
-      internship_status: "active",
-      registration_locked: true,
+    await Payment.create({
+      student_id: student.id,
+      amount,
+      currency: "INR",
+      transaction_id:
+        transactionId,
+      gateway: "cashfree",
+      cashfree_order_id:
+        orderId,
+      cf_order_id:
+        cashfreeOrder.cf_order_id
+          ? String(
+              cashfreeOrder.cf_order_id,
+            )
+          : null,
+      status: "created",
+      gateway_payload:
+        cashfreeOrder,
     });
 
     return ok(
       res,
       {
-        student_id: student.id,
+        order_id: orderId,
+
+        cf_order_id:
+          cashfreeOrder.cf_order_id,
+
+        payment_session_id:
+          cashfreeOrder
+            .payment_session_id,
+
+        amount,
+        currency: "INR",
+
+        student: {
+          id: student.id,
+          name: student.name,
+          email: student.email,
+          mobile: student.mobile,
+          registration_number:
+            student.registration_number,
+        },
+
+        domain: {
+          id: student.domain.id,
+          domain_name:
+            student.domain
+              .domain_name,
+        },
+      },
+      "Payment order created successfully",
+      201,
+    );
+  },
+);
+
+
+  const safeSignatureCompare = (
+  generatedSignature,
+  receivedSignature,
+) => {
+  const generatedBuffer =
+    Buffer.from(
+      generatedSignature,
+      "utf8",
+    );
+
+  const receivedBuffer =
+    Buffer.from(
+      receivedSignature,
+      "utf8",
+    );
+
+  if (
+    generatedBuffer.length !==
+    receivedBuffer.length
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    generatedBuffer,
+    receivedBuffer,
+  );
+};
+
+export const verifyCashfreePayment = async (
+  req,
+  res,
+  next,
+) => {
+  const transaction =
+    await Payment.sequelize.transaction();
+
+  try {
+    const orderId = String(
+      req.body.order_id || "",
+    ).trim();
+
+    if (!orderId) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        success: false,
+        data: {},
+        message:
+          "Cashfree order ID is required",
+      });
+    }
+
+    const payment = await Payment.findOne({
+      where: {
+        [Op.or]: [
+          {
+            cashfree_order_id:
+              orderId,
+          },
+          {
+            transaction_id:
+              orderId,
+          },
+        ],
+      },
+      transaction,
+      lock:
+        transaction.LOCK.UPDATE,
+    });
+
+    if (!payment) {
+      await transaction.rollback();
+
+      return res.status(404).json({
+        success: false,
+        data: {},
+        message:
+          "Payment order not found",
+      });
+    }
+
+    /*
+     * Idempotency:
+     * If already successful, don't process twice.
+     */
+    if (payment.status === "success") {
+      const student =
+        await Student.findByPk(
+          payment.student_id,
+          {
+            transaction,
+          },
+        );
+
+      await transaction.commit();
+
+      return res.json({
+        success: true,
+        data: {
+          order_id: orderId,
+          transaction_id:
+            payment.transaction_id,
+          cf_payment_id:
+            payment.cf_payment_id || null,
+          payment_status:
+            student?.payment_status ||
+            "paid",
+          internship_status:
+            student?.internship_status ||
+            "active",
+        },
+        message:
+          "Payment already verified",
+      });
+    }
+
+    const orderResponse =
+      await axios.get(
+        `${getCashfreeBaseUrl()}/orders/${encodeURIComponent(
+          orderId,
+        )}`,
+        {
+          headers:
+            getCashfreeHeaders(),
+          timeout: 15000,
+        },
+      );
+
+    const cashfreeOrder =
+      orderResponse.data;
+
+    const expectedAmount = Number(payment.amount);
+    const verifiedAmount = Number(cashfreeOrder.order_amount);
+    const verifiedCurrency = String(
+      cashfreeOrder.order_currency || "",
+    ).toUpperCase();
+
+    if (
+      !Number.isFinite(verifiedAmount) ||
+      Math.abs(expectedAmount - verifiedAmount) > 0.001 ||
+      verifiedCurrency !== "INR"
+    ) {
+      throw new AppError(
+        "Payment amount or currency mismatch",
+        409,
+      );
+    }
+
+    /*
+     * Cashfree order_status:
+     * PAID means successful payment.
+     */
+    if (
+      cashfreeOrder.order_status !==
+      "PAID"
+    ) {
+      await payment.update(
+        {
+          status:
+            cashfreeOrder.order_status ===
+            "ACTIVE"
+              ? "pending"
+              : "failed",
+
+          failure_reason:
+            `Cashfree order status: ${cashfreeOrder.order_status}`,
+        },
+        {
+          transaction,
+        },
+      );
+
+      await transaction.commit();
+
+      return res.status(202).json({
+        success: true,
+        data: {
+          order_id: orderId,
+          order_status:
+            cashfreeOrder.order_status,
+          payment_status:
+            "pending",
+        },
+        message:
+          "Payment is not completed yet",
+      });
+    }
+
+    /*
+     * Fetch payment attempts to get cf_payment_id.
+     */
+    const paymentsResponse =
+      await axios.get(
+        `${getCashfreeBaseUrl()}/orders/${encodeURIComponent(
+          orderId,
+        )}/payments`,
+        {
+          headers:
+            getCashfreeHeaders(),
+          timeout: 15000,
+        },
+      );
+
+    const paymentAttempts =
+      Array.isArray(
+        paymentsResponse.data,
+      )
+        ? paymentsResponse.data
+        : [];
+
+    const successfulAttempt =
+      paymentAttempts.find(
+        (item) =>
+          item.payment_status ===
+          "SUCCESS",
+      );
+
+    await payment.update(
+      {
+        status: "success",
+
+        cashfree_order_id:
+          cashfreeOrder.order_id,
+
+        cf_order_id:
+          String(
+            cashfreeOrder.cf_order_id ||
+              payment.cf_order_id ||
+              "",
+          ) || null,
+
+        cf_payment_id:
+          successfulAttempt
+            ?.cf_payment_id
+            ? String(
+                successfulAttempt.cf_payment_id,
+              )
+            : payment.cf_payment_id,
+
+        amount:
+          Number(
+            cashfreeOrder.order_amount,
+          ),
+
+        currency:
+          cashfreeOrder.order_currency ||
+          "INR",
+
+        paid_at:
+          successfulAttempt
+            ?.payment_time ||
+          new Date(),
+
+        failure_reason: null,
+      },
+      {
+        transaction,
+      },
+    );
+
+    const student =
+      await Student.findByPk(
+        payment.student_id,
+        {
+          transaction,
+          lock:
+            transaction.LOCK.UPDATE,
+        },
+      );
+
+    if (!student) {
+      throw new Error(
+        "Student not found for payment",
+      );
+    }
+
+    await student.update(
+      {
+        payment_status: "paid",
+        internship_status:
+          "active",
+      },
+      {
+        transaction,
+      },
+    );
+
+    await transaction.commit();
+
+    return res.json({
+      success: true,
+      data: {
+        order_id:
+          cashfreeOrder.order_id,
+
+        cf_order_id:
+          cashfreeOrder.cf_order_id,
+
         transaction_id:
           payment.transaction_id,
-        payment_status: "paid",
-        internship_status: "active",
-        registration_locked: true,
-        next_step: "login",
+
+        cf_payment_id:
+          successfulAttempt?.cf_payment_id
+            ? String(successfulAttempt.cf_payment_id)
+            : null,
+
+        payment_status:
+          "paid",
+
+        internship_status:
+          "active",
+
+        amount:
+          cashfreeOrder.order_amount,
+
+        currency:
+          cashfreeOrder.order_currency,
       },
-      "Payment successful. Account activated",
+      message:
+        "Payment verified and account activated successfully",
+    });
+  } catch (error) {
+    if (
+      !transaction.finished
+    ) {
+      await transaction.rollback();
+    }
+
+    console.error(
+      "CASHFREE PAYMENT VERIFICATION ERROR:",
+      error.response?.data ||
+        error,
     );
+
+    next(error);
+  }
+};
+
+export const cashfreeWebhook =
+  asyncHandler(async (req, res) => {
+    const signature = String(
+      req.headers["x-webhook-signature"] || "",
+    ).trim();
+
+    const timestamp = String(
+      req.headers["x-webhook-timestamp"] || "",
+    ).trim();
+
+    if (
+      !signature ||
+      !timestamp ||
+      !req.rawBody
+    ) {
+      throw new AppError(
+        "Invalid Cashfree webhook request",
+        401,
+      );
+    }
+
+    const signatureValid =
+      verifyCashfreeWebhookSignature({
+        rawBody: req.rawBody,
+        timestamp,
+        signature,
+      });
+
+    if (!signatureValid) {
+      throw new AppError(
+        "Invalid Cashfree webhook signature",
+        401,
+      );
+    }
+
+    const { data = {}, type = "" } =
+      req.body || {};
+
+    const orderData = data.order || {};
+    const paymentData =
+      data.payment || {};
+
+    const orderId = String(
+      orderData.order_id || "",
+    ).trim();
+
+    const cfOrderId =
+      orderData.cf_order_id != null
+        ? String(orderData.cf_order_id)
+        : null;
+
+    const cfPaymentId =
+      paymentData.cf_payment_id != null
+        ? String(paymentData.cf_payment_id)
+        : null;
+
+    const paymentStatus = String(
+      paymentData.payment_status || "",
+    ).toUpperCase();
+
+    if (!orderId) {
+      throw new AppError(
+        "Cashfree order ID is missing",
+        422,
+      );
+    }
+
+    /*
+     * Failed/user-dropped events are acknowledged.
+     * Account activation happens only on SUCCESS.
+     */
+    if (
+      type !== "PAYMENT_SUCCESS_WEBHOOK" ||
+      paymentStatus !== "SUCCESS"
+    ) {
+      return res.status(200).json({
+        success: true,
+        message: "Webhook acknowledged",
+      });
+    }
+
+    const transaction =
+      await Payment.sequelize.transaction();
+
+    try {
+      const payment =
+        await Payment.findOne({
+          where: {
+            [Op.or]: [
+              {
+                cashfree_order_id:
+                  orderId,
+              },
+              ...(cfOrderId
+                ? [
+                    {
+                      cf_order_id:
+                        cfOrderId,
+                    },
+                  ]
+                : []),
+            ],
+          },
+          transaction,
+          lock:
+            transaction.LOCK.UPDATE,
+        });
+
+      if (!payment) {
+        throw new AppError(
+          "Payment record not found",
+          404,
+        );
+      }
+
+      const student =
+        await Student.findByPk(
+          payment.student_id,
+          {
+            transaction,
+            lock:
+              transaction.LOCK.UPDATE,
+          },
+        );
+
+      if (!student) {
+        throw new AppError(
+          "Student record not found",
+          404,
+        );
+      }
+
+      if (
+        payment.status === "success" &&
+        student.payment_status === "paid"
+      ) {
+        await transaction.commit();
+
+        return res.status(200).json({
+          success: true,
+          message:
+            "Webhook already processed",
+        });
+      }
+
+      const expectedAmount = Number(
+        payment.amount,
+      );
+
+      const receivedAmount = Number(
+        paymentData.payment_amount,
+      );
+
+      const receivedCurrency = String(
+        paymentData.payment_currency ||
+          orderData.order_currency ||
+          "",
+      ).toUpperCase();
+
+      if (
+        !Number.isFinite(receivedAmount) ||
+        Math.abs(
+          expectedAmount - receivedAmount,
+        ) > 0.001 ||
+        receivedCurrency !== "INR"
+      ) {
+        throw new AppError(
+          "Webhook amount or currency mismatch",
+          409,
+        );
+      }
+
+      await payment.update(
+        {
+          status: "success",
+          cashfree_order_id: orderId,
+          cf_order_id:
+            cfOrderId ||
+            payment.cf_order_id,
+          cf_payment_id:
+            cfPaymentId ||
+            payment.cf_payment_id,
+          amount: receivedAmount,
+          currency: receivedCurrency,
+          paid_at:
+            paymentData.payment_time ||
+            new Date(),
+          failure_reason: null,
+          gateway_payload: {
+            ...parseJsonObject(
+              payment.gateway_payload,
+            ),
+            success_webhook: req.body,
+          },
+        },
+        { transaction },
+      );
+
+      await student.update(
+        {
+          payment_status: "paid",
+          internship_status: "active",
+          registration_locked: true,
+        },
+        { transaction },
+      );
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Webhook processed successfully",
+      });
+    } catch (error) {
+      if (!transaction.finished) {
+        await transaction.rollback();
+      }
+
+      throw error;
+    }
   });
 
-  const formatReceiptDate = (value) => {
+const formatReceiptDate = (value) => {
   if (!value) {
     return "-";
   }
@@ -1051,10 +1638,6 @@ export const downloadPaymentReceipt =
       req.params.transaction_id || "",
     ).trim();
 
-    const registrationNumber = String(
-      req.query.registration_number || "",
-    ).trim();
-
     if (!transactionId) {
       throw new AppError(
         "Transaction ID is required",
@@ -1062,16 +1645,19 @@ export const downloadPaymentReceipt =
       );
     }
 
-    if (!registrationNumber) {
-      throw new AppError(
-        "Registration number is required",
-        422,
-      );
-    }
-
     const payment = await Payment.findOne({
       where: {
-        transaction_id: transactionId,
+        [Op.or]: [
+          {
+            transaction_id: transactionId,
+          },
+          {
+            cashfree_order_id: transactionId,
+          },
+          {
+            cf_payment_id: transactionId,
+          },
+        ],
       },
     });
 
@@ -1089,16 +1675,13 @@ export const downloadPaymentReceipt =
       );
     }
 
-    const student = await Student.findOne({
-      where: {
-        id: payment.student_id,
-        registration_number: registrationNumber,
-      },
-    });
+    const student = await Student.findByPk(
+      payment.student_id,
+    );
 
     if (!student) {
       throw new AppError(
-        "Student registration details do not match",
+        "Student record not found",
         404,
       );
     }
@@ -1114,13 +1697,16 @@ export const downloadPaymentReceipt =
     }
 
     const domain = student.domain_id
-      ? await Domain.findByPk(student.domain_id)
+      ? await Domain.findByPk(
+          student.domain_id,
+        )
       : null;
 
     const college = student.college_id
-      ? await College.findByPk(student.college_id)
+      ? await College.findByPk(
+          student.college_id,
+        )
       : null;
-
     const receiptNumber = `RKN-${String(
       payment.id,
     ).padStart(6, "0")}`;

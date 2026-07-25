@@ -29,30 +29,8 @@ import {
 const getLoggedInMentor = async (
   req,
 ) => {
-  if (!req.user?.email) {
-    throw new AppError(
-      "Authenticated mentor email not found",
-      401,
-    );
-  }
-
   const mentor =
-    await Mentor.findOne({
-      where: {
-        email:
-          req.user.email,
-      },
-
-      attributes: [
-        "id",
-        "name",
-        "employee_id",
-        "email",
-        "domain_id",
-        "college_id",
-        "status",
-      ],
-    });
+    req.mentor;
 
   if (!mentor) {
     throw new AppError(
@@ -62,8 +40,7 @@ const getLoggedInMentor = async (
   }
 
   if (
-    mentor.status !==
-    "active"
+    mentor.status !== "active"
   ) {
     throw new AppError(
       "Mentor account is inactive",

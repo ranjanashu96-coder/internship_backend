@@ -1,5 +1,5 @@
 import fs from "fs";
-import { Op } from "sequelize";
+import { Op ,fn ,col,} from "sequelize";
 import {
   importStudents as importStudentsFromExcel,
 } from "../services/excelImportService.js";
@@ -28,6 +28,679 @@ const modelMap = {
   mentors: Mentor,
   students: Student,
 };
+
+
+const createCountMap = (
+  rows,
+  fieldName,
+) => {
+  return rows.reduce(
+    (result, row) => {
+      const key =
+        row[fieldName] ??
+        "unknown";
+
+      result[key] =
+        Number(row.count || 0);
+
+      return result;
+    },
+    {},
+  );
+};
+
+const getMonthKey = (
+  date,
+) => {
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1,
+    ).padStart(2, "0");
+
+  return `${year}-${month}`;
+};
+
+export const getAdminDashboard =
+  asyncHandler(
+    async (_req, res) => {
+      const now =
+        new Date();
+
+      const trendStartDate =
+        new Date(
+          now.getFullYear(),
+          now.getMonth() - 11,
+          1,
+        );
+
+      const [
+        totalColleges,
+        totalMentors,
+        totalStudents,
+        totalDomains,
+
+        unassignedStudents,
+
+        studentStatusRows,
+        paymentStatusRows,
+        mentorStatusRows,
+        collegeStatusRows,
+
+        domainCountRows,
+        collegeCountRows,
+
+        recentStudents,
+        recentColleges,
+
+        registrationDateRows,
+      ] = await Promise.all([
+        College.count(),
+
+        Mentor.count(),
+
+        Student.count(),
+
+        Domain.count(),
+
+        Student.count({
+          where: {
+            mentor_id: null,
+          },
+        }),
+
+        Student.findAll({
+          attributes: [
+            "internship_status",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "count",
+            ],
+          ],
+          group: [
+            "internship_status",
+          ],
+          raw: true,
+        }),
+
+        Student.findAll({
+          attributes: [
+            "payment_status",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "count",
+            ],
+          ],
+          group: [
+            "payment_status",
+          ],
+          raw: true,
+        }),
+
+        Mentor.findAll({
+          attributes: [
+            "status",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "count",
+            ],
+          ],
+          group: ["status"],
+          raw: true,
+        }),
+
+        College.findAll({
+          attributes: [
+            "status",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "count",
+            ],
+          ],
+          group: ["status"],
+          raw: true,
+        }),
+
+        Student.findAll({
+          attributes: [
+            "domain_id",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "student_count",
+            ],
+          ],
+          where: {
+            domain_id: {
+              [Op.ne]: null,
+            },
+          },
+          group: [
+            "domain_id",
+          ],
+          raw: true,
+        }),
+
+        Student.findAll({
+          attributes: [
+            "college_id",
+            [
+              fn(
+                "COUNT",
+                col("id"),
+              ),
+              "student_count",
+            ],
+          ],
+          where: {
+            college_id: {
+              [Op.ne]: null,
+            },
+          },
+          group: [
+            "college_id",
+          ],
+          raw: true,
+        }),
+
+        Student.findAll({
+          attributes: [
+            "id",
+            "registration_number",
+            "student_id",
+            "name",
+            "email",
+            "session",
+            "semester",
+            "internship_status",
+            "payment_status",
+            "created_at",
+          ],
+
+          include: [
+            {
+              model: College,
+              as: "college",
+              attributes: [
+                "id",
+                "name",
+                "code",
+              ],
+              required: false,
+            },
+            {
+              model: Domain,
+              as: "domain",
+              attributes: [
+                "id",
+                "domain_name",
+              ],
+              required: false,
+            },
+          ],
+
+          order: [
+            [
+              "id",
+              "DESC",
+            ],
+          ],
+
+          limit: 8,
+        }),
+
+        College.findAll({
+          attributes: [
+            "id",
+            "name",
+            "code",
+            "university",
+            "status",
+            "created_at",
+          ],
+
+          order: [
+            [
+              "id",
+              "DESC",
+            ],
+          ],
+
+          limit: 5,
+        }),
+
+        Student.findAll({
+          attributes: [
+            "created_at",
+          ],
+
+          where: {
+            created_at: {
+              [Op.gte]:
+                trendStartDate,
+            },
+          },
+
+          raw: true,
+        }),
+      ]);
+
+      const domainIds =
+        domainCountRows
+          .map((row) =>
+            Number(
+              row.domain_id,
+            ),
+          )
+          .filter(Boolean);
+
+      const collegeIds =
+        collegeCountRows
+          .map((row) =>
+            Number(
+              row.college_id,
+            ),
+          )
+          .filter(Boolean);
+
+      const [
+        domains,
+        colleges,
+      ] = await Promise.all([
+        domainIds.length
+          ? Domain.findAll({
+              where: {
+                id: {
+                  [Op.in]:
+                    domainIds,
+                },
+              },
+              attributes: [
+                "id",
+                "domain_name",
+              ],
+              raw: true,
+            })
+          : [],
+
+        collegeIds.length
+          ? College.findAll({
+              where: {
+                id: {
+                  [Op.in]:
+                    collegeIds,
+                },
+              },
+              attributes: [
+                "id",
+                "name",
+                "code",
+              ],
+              raw: true,
+            })
+          : [],
+      ]);
+
+      const domainMap =
+        new Map(
+          domains.map(
+            (domain) => [
+              Number(
+                domain.id,
+              ),
+              domain,
+            ],
+          ),
+        );
+
+      const collegeMap =
+        new Map(
+          colleges.map(
+            (college) => [
+              Number(
+                college.id,
+              ),
+              college,
+            ],
+          ),
+        );
+
+      const domainDistribution =
+        domainCountRows
+          .map((row) => {
+            const domain =
+              domainMap.get(
+                Number(
+                  row.domain_id,
+                ),
+              );
+
+            return {
+              domain_id:
+                Number(
+                  row.domain_id,
+                ),
+
+              domain_name:
+                domain
+                  ?.domain_name ??
+                "Unknown domain",
+
+              student_count:
+                Number(
+                  row.student_count ??
+                    0,
+                ),
+            };
+          })
+          .sort(
+            (first, second) =>
+              second.student_count -
+              first.student_count,
+          );
+
+      const collegeDistribution =
+        collegeCountRows
+          .map((row) => {
+            const college =
+              collegeMap.get(
+                Number(
+                  row.college_id,
+                ),
+              );
+
+            return {
+              college_id:
+                Number(
+                  row.college_id,
+                ),
+
+              college_name:
+                college?.name ??
+                "Unknown college",
+
+              college_code:
+                college?.code ??
+                null,
+
+              student_count:
+                Number(
+                  row.student_count ??
+                    0,
+                ),
+            };
+          })
+          .sort(
+            (first, second) =>
+              second.student_count -
+              first.student_count,
+          );
+
+      const monthlyMap =
+        new Map();
+
+      const monthlyRegistrations =
+        Array.from(
+          {
+            length: 12,
+          },
+          (_, index) => {
+            const date =
+              new Date(
+                now.getFullYear(),
+                now.getMonth() -
+                  11 +
+                  index,
+                1,
+              );
+
+            const key =
+              getMonthKey(date);
+
+            const month = {
+              key,
+
+              month:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month:
+                      "short",
+                  },
+                ),
+
+              year:
+                date.getFullYear(),
+
+              label:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month:
+                      "short",
+                    year:
+                      "numeric",
+                  },
+                ),
+
+              registrations: 0,
+            };
+
+            monthlyMap.set(
+              key,
+              month,
+            );
+
+            return month;
+          },
+        );
+
+      for (
+        const row of
+        registrationDateRows
+      ) {
+        if (!row.created_at) {
+          continue;
+        }
+
+        const date =
+          new Date(
+            row.created_at,
+          );
+
+        const month =
+          monthlyMap.get(
+            getMonthKey(date),
+          );
+
+        if (month) {
+          month.registrations +=
+            1;
+        }
+      }
+
+      const studentStatus =
+        createCountMap(
+          studentStatusRows,
+          "internship_status",
+        );
+
+      const paymentStatus =
+        createCountMap(
+          paymentStatusRows,
+          "payment_status",
+        );
+
+      const mentorStatus =
+        createCountMap(
+          mentorStatusRows,
+          "status",
+        );
+
+      const collegeStatus =
+        createCountMap(
+          collegeStatusRows,
+          "status",
+        );
+
+      const activeStudents =
+        Number(
+          studentStatus.active ||
+            0,
+        );
+
+      const completedStudents =
+        Number(
+          studentStatus.completed ||
+            0,
+        );
+
+      const paidStudents =
+        Number(
+          paymentStatus.paid ||
+            0,
+        );
+
+      const completionRate =
+        totalStudents > 0
+          ? Number(
+              (
+                (completedStudents /
+                  totalStudents) *
+                100
+              ).toFixed(2),
+            )
+          : 0;
+
+      const paymentRate =
+        totalStudents > 0
+          ? Number(
+              (
+                (paidStudents /
+                  totalStudents) *
+                100
+              ).toFixed(2),
+            )
+          : 0;
+
+      return ok(
+        res,
+        {
+          summary: {
+            total_colleges:
+              totalColleges,
+
+            active_colleges:
+              Number(
+                collegeStatus.active ||
+                  0,
+              ),
+
+            pending_colleges:
+              Number(
+                collegeStatus.pending ||
+                  0,
+              ),
+
+            total_mentors:
+              totalMentors,
+
+            active_mentors:
+              Number(
+                mentorStatus.active ||
+                  0,
+              ),
+
+            inactive_mentors:
+              Number(
+                mentorStatus.inactive ||
+                  0,
+              ),
+
+            total_students:
+              totalStudents,
+
+            active_students:
+              activeStudents,
+
+            completed_students:
+              completedStudents,
+
+            blocked_students:
+              Number(
+                studentStatus.blocked ||
+                  0,
+              ),
+
+            paid_students:
+              paidStudents,
+
+            pending_payments:
+              Number(
+                paymentStatus.pending ||
+                  0,
+              ),
+
+            unassigned_students:
+              unassignedStudents,
+
+            total_domains:
+              totalDomains,
+
+            completion_rate:
+              completionRate,
+
+            payment_rate:
+              paymentRate,
+          },
+
+          student_status:
+            studentStatus,
+
+          payment_status:
+            paymentStatus,
+
+          mentor_status:
+            mentorStatus,
+
+          college_status:
+            collegeStatus,
+
+          monthly_registrations:
+            monthlyRegistrations,
+
+          domain_distribution:
+            domainDistribution,
+
+          college_distribution:
+            collegeDistribution,
+
+          recent_students:
+            recentStudents,
+
+          recent_colleges:
+            recentColleges,
+        },
+        "Admin dashboard fetched successfully",
+      );
+    },
+  );
 
 const assignMentorToMatchingStudents = async ({
   mentor,

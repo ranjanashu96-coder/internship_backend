@@ -707,8 +707,92 @@ export const Certificate = define(
     tableName: "certificates",
   },
 );
-export const Payment=define("Payment",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},student_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},amount:{type:DataTypes.DECIMAL(10,2),allowNull:false},transaction_id:{type:DataTypes.STRING(150),unique:true,allowNull:false},status:{type:DataTypes.ENUM("created","success","failed","refunded"),defaultValue:"created"},gateway_payload:DataTypes.JSON,...common},{tableName:"payments"});
-export const AuditLog=define("AuditLog",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},user_id:DataTypes.BIGINT.UNSIGNED,action:{type:DataTypes.STRING(100),allowNull:false},entity_type:{type:DataTypes.STRING(100),allowNull:false},entity_id:DataTypes.BIGINT.UNSIGNED,details:DataTypes.JSON,timestamp:{type:DataTypes.DATE,defaultValue:DataTypes.NOW}},{tableName:"audit_logs"});
+export const Payment = define(
+  "Payment",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    student_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+    },
+
+    currency: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+      defaultValue: "INR",
+    },
+
+    transaction_id: {
+      type: DataTypes.STRING(150),
+      unique: true,
+      allowNull: true,
+    },
+
+    gateway: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: "cashfree",
+    },
+
+    cashfree_order_id: {
+      type: DataTypes.STRING(100),
+      unique: true,
+      allowNull: true,
+    },
+
+    cf_order_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    cf_payment_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "created",
+        "pending",
+        "processing",
+        "success",
+        "failed",
+        "refunded",
+      ),
+      defaultValue: "created",
+    },
+
+    failure_reason: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    paid_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    gateway_payload: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+
+    ...common,
+  },
+  {
+    tableName: "payments",
+  },
+);export const AuditLog=define("AuditLog",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},user_id:DataTypes.BIGINT.UNSIGNED,action:{type:DataTypes.STRING(100),allowNull:false},entity_type:{type:DataTypes.STRING(100),allowNull:false},entity_id:DataTypes.BIGINT.UNSIGNED,details:DataTypes.JSON,timestamp:{type:DataTypes.DATE,defaultValue:DataTypes.NOW}},{tableName:"audit_logs"});
 export const ChapterCompletion = define(
   "ChapterCompletion",
   {

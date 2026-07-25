@@ -61,6 +61,16 @@ r.put(
   c.updateProfile,
 );
 
+r.get(
+  "/documents",
+  c.getDocuments,
+);
+
+r.get(
+  "/documents/:documentId/download",
+  c.downloadDocument,
+);
+
 /*
 |--------------------------------------------------------------------------
 | Learning
