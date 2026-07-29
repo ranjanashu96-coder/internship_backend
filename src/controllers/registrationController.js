@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import PDFDocument from "pdfkit";
 import axios from "axios";
 import crypto from "crypto";
@@ -1117,6 +1119,17 @@ export const verifyCashfreePayment = async (
 
       await transaction.commit();
 
+      try {
+  await ensurePaymentReceipt(
+    payment.id,
+  );
+} catch (receiptError) {
+  console.error(
+    "EXISTING PAYMENT RECEIPT ERROR:",
+    receiptError,
+  );
+}
+
       return res.json({
         success: true,
         data: {
@@ -1194,6 +1207,17 @@ export const verifyCashfreePayment = async (
       );
 
       await transaction.commit();
+
+    try {
+  await ensurePaymentReceipt(
+    payment.id,
+  );
+} catch (receiptError) {
+  console.error(
+    "PAYMENT RECEIPT GENERATION ERROR:",
+    receiptError,
+  );
+}
 
       return res.status(202).json({
         success: true,
@@ -1497,6 +1521,18 @@ export const cashfreeWebhook =
       ) {
         await transaction.commit();
 
+
+  try {
+    await ensurePaymentReceipt(
+      payment.id,
+    );
+  } catch (receiptError) {
+    console.error(
+      "EXISTING WEBHOOK RECEIPT ERROR:",
+      receiptError,
+    );
+  }
+
         return res.status(200).json({
           success: true,
           message:
@@ -1567,6 +1603,17 @@ export const cashfreeWebhook =
       );
 
       await transaction.commit();
+      
+      try {
+  await ensurePaymentReceipt(
+    payment.id,
+  );
+} catch (receiptError) {
+  console.error(
+    "WEBHOOK RECEIPT GENERATION ERROR:",
+    receiptError,
+  );
+}
 
       return res.status(200).json({
         success: true,
@@ -1632,34 +1679,327 @@ const addReceiptRow = (
   doc.moveDown(0.7);
 };
 
-export const downloadPaymentReceipt =
-  asyncHandler(async (req, res) => {
-    const transactionId = String(
-      req.params.transaction_id || "",
-    ).trim();
+const RECEIPT_STORAGE_DIR =
+  path.resolve(
+    process.cwd(),
+    "storage",
+    "payment-receipts",
+  );
 
-    if (!transactionId) {
-      throw new AppError(
-        "Transaction ID is required",
-        422,
-      );
-    }
-
-    const payment = await Payment.findOne({
-      where: {
-        [Op.or]: [
-          {
-            transaction_id: transactionId,
-          },
-          {
-            cashfree_order_id: transactionId,
-          },
-          {
-            cf_payment_id: transactionId,
-          },
-        ],
+const ensureReceiptStorageDirectory =
+  async () => {
+    await fs.promises.mkdir(
+      RECEIPT_STORAGE_DIR,
+      {
+        recursive: true,
       },
-    });
+    );
+  };
+
+const resolveStoredReceiptPath = (
+  receiptPath,
+) => {
+  if (!receiptPath) {
+    return null;
+  }
+
+  const absolutePath =
+    path.resolve(
+      process.cwd(),
+      String(receiptPath),
+    );
+
+  const validPath =
+    absolutePath ===
+      RECEIPT_STORAGE_DIR ||
+    absolutePath.startsWith(
+      `${RECEIPT_STORAGE_DIR}${path.sep}`,
+    );
+
+  if (!validPath) {
+    return null;
+  }
+
+  return absolutePath;
+};
+
+const receiptFileExists =
+  async (filePath) => {
+    try {
+      await fs.promises.access(
+        filePath,
+        fs.constants.F_OK,
+      );
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+const getReceiptNumber = (
+  payment,
+) => {
+  return (
+    payment.receipt_number ||
+    `RKN-${String(
+      payment.id,
+    ).padStart(6, "0")}`
+  );
+};
+
+const writePaymentReceiptContent = (
+  doc,
+  {
+    payment,
+    student,
+    domain,
+    college,
+  },
+) => {
+  const receiptNumber =
+    getReceiptNumber(payment);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(24)
+    .fillColor("#1d4ed8")
+    .text(
+      "RKNexora",
+      {
+        align: "center",
+      },
+    );
+
+  doc
+    .moveDown(0.3)
+    .font("Helvetica-Bold")
+    .fontSize(16)
+    .fillColor("#0f172a")
+    .text(
+      "Internship Registration Receipt",
+      {
+        align: "center",
+      },
+    );
+
+  doc
+    .moveDown(0.4)
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor("#64748b")
+    .text(
+      "This receipt confirms successful registration and payment.",
+      {
+        align: "center",
+      },
+    );
+
+  doc.moveDown(1.5);
+
+  doc
+    .strokeColor("#cbd5e1")
+    .lineWidth(1)
+    .moveTo(50, doc.y)
+    .lineTo(545, doc.y)
+    .stroke();
+
+  doc.moveDown(1);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .fillColor("#0f172a")
+    .text(
+      "Payment Details",
+    );
+
+  doc.moveDown(0.8);
+
+  addReceiptRow(
+    doc,
+    "Receipt Number",
+    receiptNumber,
+  );
+
+  addReceiptRow(
+    doc,
+    "Transaction ID",
+    payment.transaction_id,
+  );
+
+  addReceiptRow(
+    doc,
+    "Cashfree Order ID",
+    payment.cashfree_order_id ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Cashfree Payment ID",
+    payment.cf_payment_id ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Payment Status",
+    "Paid",
+  );
+
+  addReceiptRow(
+    doc,
+    "Payment Date",
+    formatReceiptDate(
+      payment.paid_at ||
+        payment.updated_at ||
+        payment.updatedAt ||
+        payment.created_at ||
+        payment.createdAt,
+    ),
+  );
+
+  addReceiptRow(
+    doc,
+    "Amount Paid",
+    formatAmount(
+      payment.amount,
+    ),
+  );
+
+  doc.moveDown(0.7);
+
+  doc
+    .strokeColor("#cbd5e1")
+    .moveTo(50, doc.y)
+    .lineTo(545, doc.y)
+    .stroke();
+
+  doc.moveDown(1);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .fillColor("#0f172a")
+    .text(
+      "Student Registration Details",
+    );
+
+  doc.moveDown(0.8);
+
+  addReceiptRow(
+    doc,
+    "Registration Number",
+    student.registration_number,
+  );
+
+  addReceiptRow(
+    doc,
+    "Student Name",
+    student.full_name ||
+      student.name ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Father Name",
+    student.father_name ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Email",
+    student.email || "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Mobile",
+    student.mobile || "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Programme",
+    student.programme ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Major Subject",
+    student.major_subject ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Session",
+    student.session ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Semester",
+    student.semester ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "College",
+    college?.name ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Internship Domain",
+    domain?.domain_name ||
+      "-",
+  );
+
+  addReceiptRow(
+    doc,
+    "Registration Status",
+    student.internship_status,
+  );
+
+  doc.moveDown(1.5);
+
+  doc
+    .font("Helvetica")
+    .fontSize(9)
+    .fillColor("#64748b")
+    .text(
+      "This is a computer-generated receipt and does not require a physical signature.",
+      {
+        align: "center",
+      },
+    );
+
+  doc
+    .moveDown(0.5)
+    .text(
+      `Generated on ${formatReceiptDate(
+        new Date(),
+      )}`,
+      {
+        align: "center",
+      },
+    );
+};
+
+const ensurePaymentReceipt =
+  async (paymentId) => {
+    const payment =
+      await Payment.findByPk(
+        paymentId,
+      );
 
     if (!payment) {
       throw new AppError(
@@ -1668,16 +2008,51 @@ export const downloadPaymentReceipt =
       );
     }
 
-    if (payment.status !== "success") {
+    if (
+      ![
+        "success",
+        "paid",
+      ].includes(
+        payment.status,
+      )
+    ) {
       throw new AppError(
         "Receipt is available only after successful payment",
         409,
       );
     }
 
-    const student = await Student.findByPk(
-      payment.student_id,
-    );
+    const existingReceiptPath =
+      resolveStoredReceiptPath(
+        payment.receipt_path,
+      );
+
+    if (
+      existingReceiptPath &&
+      await receiptFileExists(
+        existingReceiptPath,
+      )
+    ) {
+      return {
+        absolutePath:
+          existingReceiptPath,
+
+        fileName:
+          path.basename(
+            existingReceiptPath,
+          ),
+
+        receiptNumber:
+          getReceiptNumber(
+            payment,
+          ),
+      };
+    }
+
+    const student =
+      await Student.findByPk(
+        payment.student_id,
+      );
 
     if (!student) {
       throw new AppError(
@@ -1687,262 +2062,213 @@ export const downloadPaymentReceipt =
     }
 
     if (
-      student.payment_status !== "paid" ||
-      student.internship_status !== "active"
+      student.payment_status !==
+      "paid"
     ) {
       throw new AppError(
-        "Student account is not active",
+        "Student payment is not completed",
         409,
       );
     }
 
-    const domain = student.domain_id
-      ? await Domain.findByPk(
-          student.domain_id,
-        )
-      : null;
+    const domain =
+      student.domain_id
+        ? await Domain.findByPk(
+            student.domain_id,
+          )
+        : null;
 
-    const college = student.college_id
-      ? await College.findByPk(
-          student.college_id,
-        )
-      : null;
-    const receiptNumber = `RKN-${String(
-      payment.id,
-    ).padStart(6, "0")}`;
+    const college =
+      student.college_id
+        ? await College.findByPk(
+            student.college_id,
+          )
+        : null;
+
+    await ensureReceiptStorageDirectory();
+
+    const receiptNumber =
+      getReceiptNumber(
+        payment,
+      );
 
     const safeRegistrationNumber =
-      student.registration_number.replace(
+      String(
+        student.registration_number ||
+          `student-${student.id}`,
+      ).replace(
         /[^a-zA-Z0-9-_]/g,
         "_",
       );
 
     const fileName =
-      `receipt-${safeRegistrationNumber}.pdf`;
+      `receipt-${safeRegistrationNumber}-${payment.id}.pdf`;
 
-    res.setHeader(
-      "Content-Type",
-      "application/pdf",
+    const absolutePath =
+      path.join(
+        RECEIPT_STORAGE_DIR,
+        fileName,
+      );
+
+    const relativePath =
+      path
+        .relative(
+          process.cwd(),
+          absolutePath,
+        )
+        .split(path.sep)
+        .join("/");
+
+    await new Promise(
+      (
+        resolve,
+        reject,
+      ) => {
+        const output =
+          fs.createWriteStream(
+            absolutePath,
+          );
+
+        const doc =
+          new PDFDocument({
+            size: "A4",
+            margin: 50,
+
+            info: {
+              Title:
+                `Payment Receipt - ${student.registration_number}`,
+
+              Author:
+                "RKNexora",
+
+              Subject:
+                "Internship Registration Payment Receipt",
+            },
+          });
+
+        let settled = false;
+
+        const handleError = (
+          error,
+        ) => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          reject(error);
+        };
+
+        output.on(
+          "finish",
+          () => {
+            if (settled) {
+              return;
+            }
+
+            settled = true;
+            resolve();
+          },
+        );
+
+        output.on(
+          "error",
+          handleError,
+        );
+
+        doc.on(
+          "error",
+          handleError,
+        );
+
+        doc.pipe(output);
+
+        writePaymentReceiptContent(
+          doc,
+          {
+            payment,
+            student,
+            domain,
+            college,
+          },
+        );
+
+        doc.end();
+      },
     );
 
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${fileName}"`,
-    );
+    await payment.update({
+      receipt_path:
+        relativePath,
+
+      receipt_generated_at:
+        new Date(),
+
+      receipt_number:
+        receiptNumber,
+    });
+
+    return {
+      absolutePath,
+      fileName,
+      receiptNumber,
+    };
+  };
+
+export const downloadPaymentReceipt =
+  asyncHandler(async (req, res) => {
+    const transactionId =
+      String(
+        req.params.transaction_id ||
+          "",
+      ).trim();
+
+    if (!transactionId) {
+      throw new AppError(
+        "Transaction ID is required",
+        422,
+      );
+    }
+
+    const payment =
+      await Payment.findOne({
+        where: {
+          [Op.or]: [
+            {
+              transaction_id:
+                transactionId,
+            },
+            {
+              cashfree_order_id:
+                transactionId,
+            },
+            {
+              cf_payment_id:
+                transactionId,
+            },
+          ],
+        },
+      });
+
+    if (!payment) {
+      throw new AppError(
+        "Payment record not found",
+        404,
+      );
+    }
+
+    const receipt =
+      await ensurePaymentReceipt(
+        payment.id,
+      );
 
     res.setHeader(
       "Cache-Control",
-      "no-store",
+      "private, no-store",
     );
 
-    const doc = new PDFDocument({
-      size: "A4",
-      margin: 50,
-      info: {
-        Title: `Payment Receipt - ${student.registration_number}`,
-        Author: "RKNexora",
-        Subject: "Internship Registration Payment Receipt",
-      },
-    });
-
-    doc.pipe(res);
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(24)
-      .fillColor("#1d4ed8")
-      .text("RKNexora", {
-        align: "center",
-      });
-
-    doc
-      .moveDown(0.3)
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .fillColor("#0f172a")
-      .text("Internship Registration Receipt", {
-        align: "center",
-      });
-
-    doc
-      .moveDown(0.4)
-      .font("Helvetica")
-      .fontSize(10)
-      .fillColor("#64748b")
-      .text(
-        "This receipt confirms successful registration and payment.",
-        {
-          align: "center",
-        },
-      );
-
-    doc.moveDown(1.5);
-
-    doc
-      .strokeColor("#cbd5e1")
-      .lineWidth(1)
-      .moveTo(50, doc.y)
-      .lineTo(545, doc.y)
-      .stroke();
-
-    doc.moveDown(1);
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text("Payment Details");
-
-    doc.moveDown(0.8);
-
-    addReceiptRow(
-      doc,
-      "Receipt Number",
-      receiptNumber,
+    return res.download(
+      receipt.absolutePath,
+      receipt.fileName,
     );
-
-    addReceiptRow(
-      doc,
-      "Transaction ID",
-      payment.transaction_id,
-    );
-
-    addReceiptRow(
-      doc,
-      "Payment Status",
-      "Paid",
-    );
-
-    addReceiptRow(
-      doc,
-      "Payment Date",
-      formatReceiptDate(
-        payment.updated_at ||
-          payment.updatedAt ||
-          payment.created_at ||
-          payment.createdAt,
-      ),
-    );
-
-    addReceiptRow(
-      doc,
-      "Amount Paid",
-      formatAmount(payment.amount),
-    );
-
-    doc.moveDown(0.7);
-
-    doc
-      .strokeColor("#cbd5e1")
-      .moveTo(50, doc.y)
-      .lineTo(545, doc.y)
-      .stroke();
-
-    doc.moveDown(1);
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text("Student Registration Details");
-
-    doc.moveDown(0.8);
-
-    addReceiptRow(
-      doc,
-      "Registration Number",
-      student.registration_number,
-    );
-
-    addReceiptRow(
-      doc,
-      "Student Name",
-      student.full_name ||
-        student.name ||
-        "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Father Name",
-      student.father_name || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Email",
-      student.email || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Mobile",
-      student.mobile || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Programme",
-      student.programme || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Major Subject",
-      student.major_subject || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Session",
-      student.session || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Semester",
-      student.semester || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "College",
-      college?.name || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Internship Domain",
-      domain?.domain_name || "-",
-    );
-
-    addReceiptRow(
-      doc,
-      "Registration Status",
-      student.internship_status,
-    );
-
-    doc.moveDown(1.5);
-
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .fillColor("#64748b")
-      .text(
-        "This is a computer-generated receipt and does not require a physical signature.",
-        {
-          align: "center",
-        },
-      );
-
-    doc
-      .moveDown(0.5)
-      .text(
-        `Generated on ${formatReceiptDate(new Date())}`,
-        {
-          align: "center",
-        },
-      );
-
-    doc.end();
   });

@@ -1193,157 +1193,219 @@ export const create = (entity) =>
  * 1. College
  * 2. College admin user
  */
-export const createCollege = asyncHandler(async (req, res) => {
-  const transaction = await sequelize.transaction();
+export const createCollege = asyncHandler(
+  async (req, res) => {
+    const transaction =
+      await sequelize.transaction();
 
-  try {
-    const {
-      name,
-      code,
-      university,
-      principal_name,
-      coordinator_name,
-      address,
-      state,
-      district,
-      pincode,
-      logo,
-      college_share,
-      rknexora_share,
-      status,
-
-      admin_username,
-      admin_email,
-      admin_password,
-    } = req.body;
-
-    if (!name || !code) {
-      throw new AppError(
-        "College name and code are required",
-        422,
-      );
-    }
-
-    if (
-      !admin_username ||
-      !admin_email ||
-      !admin_password
-    ) {
-      throw new AppError(
-        "College admin username, email and password are required",
-        422,
-      );
-    }
-
-    const totalShare =
-      Number(college_share || 0) +
-      Number(rknexora_share || 0);
-
-    if (Math.abs(totalShare - 100) > 0.01) {
-      throw new AppError(
-        "College share and RKNexora share total must be 100",
-        422,
-      );
-    }
-
-    const existingCollege = await College.findOne({
-      where: {
-        code,
-      },
-      transaction,
-    });
-
-    if (existingCollege) {
-      throw new AppError(
-        "College code already exists",
-        409,
-      );
-    }
-
-    const existingUser = await User.findOne({
-      where: {
-        [Op.or]: [
-          {
-            username: admin_username,
-          },
-          {
-            email: admin_email,
-          },
-        ],
-      },
-      transaction,
-    });
-
-    if (existingUser) {
-      throw new AppError(
-        "Admin username or email already exists",
-        409,
-      );
-    }
-
-    const college = await College.create(
-      {
+    try {
+      const {
         name,
         code,
         university,
         principal_name,
         coordinator_name,
+        email,
+        mobile,
         address,
         state,
         district,
         pincode,
-        logo: logo || null,
         college_share,
         rknexora_share,
-        status: status || "active",
-      },
-      {
-        transaction,
-      },
-    );
+        status,
 
-    const passwordHash = await hashPassword(admin_password);
+        admin_username,
+        admin_email,
+        admin_password,
+      } = req.body;
 
-    const collegeAdmin = await User.create(
-      {
-        username: admin_username,
-        email: admin_email,
-        password_hash: passwordHash,
-        role: "college_admin",
-        college_id: college.id,
-        status:
-          college.status === "active"
-            ? "active"
-            : "inactive",
-      },
-      {
-        transaction,
-      },
-    );
+      if (!name || !code) {
+        throw new AppError(
+          "College name and code are required",
+          422,
+        );
+      }
 
-    await transaction.commit();
+      if (
+        !admin_username ||
+        !admin_email ||
+        !admin_password
+      ) {
+        throw new AppError(
+          "College admin username, email and password are required",
+          422,
+        );
+      }
 
-    ok(
-      res,
-      {
-        college,
-        admin: {
-          id: collegeAdmin.id,
-          username: collegeAdmin.username,
-          email: collegeAdmin.email,
-          role: collegeAdmin.role,
-          college_id: collegeAdmin.college_id,
-          status: collegeAdmin.status,
+      const totalShare =
+        Number(college_share || 0) +
+        Number(rknexora_share || 0);
+
+      if (
+        Math.abs(totalShare - 100) >
+        0.01
+      ) {
+        throw new AppError(
+          "College share and RKNexora share total must be 100",
+          422,
+        );
+      }
+
+      const existingCollege =
+        await College.findOne({
+          where: {
+            code,
+          },
+          transaction,
+        });
+
+      if (existingCollege) {
+        throw new AppError(
+          "College code already exists",
+          409,
+        );
+      }
+
+      const existingUser =
+        await User.findOne({
+          where: {
+            [Op.or]: [
+              {
+                username:
+                  admin_username,
+              },
+              {
+                email:
+                  admin_email,
+              },
+            ],
+          },
+          transaction,
+        });
+
+      if (existingUser) {
+        throw new AppError(
+          "Admin username or email already exists",
+          409,
+        );
+      }
+
+      const logoPath = req.file
+        ? `/uploads/colleges/${req.file.filename}`
+        : null;
+
+      const normalizedStatus =
+        status === "inactive"
+          ? "inactive"
+          : "active";
+
+      const college =
+        await College.create(
+          {
+            name,
+            code,
+            university:
+              university || null,
+            principal_name:
+              principal_name || null,
+            coordinator_name:
+              coordinator_name || null,
+            email:
+              email || null,
+            mobile:
+              mobile || null,
+            address:
+              address || null,
+            state:
+              state || null,
+            district:
+              district || null,
+            pincode:
+              pincode || null,
+            logo:
+              logoPath,
+            college_share:
+              Number(college_share),
+            rknexora_share:
+              Number(rknexora_share),
+            status:
+              normalizedStatus,
+          },
+          {
+            transaction,
+          },
+        );
+
+      const passwordHash =
+        await hashPassword(
+          admin_password,
+        );
+
+      const collegeAdmin =
+        await User.create(
+          {
+            username:
+              admin_username,
+            email:
+              admin_email,
+            password_hash:
+              passwordHash,
+            role:
+              "college_admin",
+            college_id:
+              college.id,
+            status:
+              college.status ===
+              "active"
+                ? "active"
+                : "inactive",
+          },
+          {
+            transaction,
+          },
+        );
+
+      await transaction.commit();
+
+      return ok(
+        res,
+        {
+          college,
+          admin: {
+            id:
+              collegeAdmin.id,
+            username:
+              collegeAdmin.username,
+            email:
+              collegeAdmin.email,
+            role:
+              collegeAdmin.role,
+            college_id:
+              collegeAdmin.college_id,
+            status:
+              collegeAdmin.status,
+          },
         },
-      },
-      "College and college admin created successfully",
-      201,
-    );
-  } catch (error) {
-    await transaction.rollback();
-    throw error;
-  }
-});
+        "College and college admin created successfully",
+        201,
+      );
+    } catch (error) {
+      await transaction.rollback();
+
+      if (
+        req.file?.path &&
+        fs.existsSync(req.file.path)
+      ) {
+        fs.unlinkSync(
+          req.file.path,
+        );
+      }
+
+      throw error;
+    }
+  },
+);
 
 /**
  * Generic update

@@ -35,7 +35,7 @@ const resolveAssets = (assets = {}) => {
 
   return {
     logoDataUri: fileToDataUri(
-      assets.logo || path.join(assetRoot, "eduintern-logo.png"),
+      assets.logo || path.join(assetRoot, "rknexora-logo.png"),
     ),
     signatureDataUri: fileToDataUri(
       assets.signature || path.join(assetRoot, "director-signature.png"),

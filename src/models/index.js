@@ -1,4 +1,7 @@
 import { DataTypes } from "sequelize";
+import Quiz from "./Quiz.js";
+import QuizAttempt from "./QuizAttempt.js";
+import QuizAnswer from "./QuizAnswer.js";
 import sequelize from "../config/database.js";
 const common = { created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }, updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW } };
 const define=(name, attrs, opts={})=>sequelize.define(name, attrs,{ tableName: opts.tableName||name.toLowerCase(), timestamps:false, indexes:opts.indexes||[] });
@@ -485,8 +488,212 @@ export const GeneratedDocument = define(
 );
 
 export const Module=define("Module",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},domain_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},module_number:{type:DataTypes.INTEGER.UNSIGNED,allowNull:false},module_name:{type:DataTypes.STRING(255),allowNull:false},...common},{tableName:"modules"});
-export const Chapter=define("Chapter",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},module_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},chapter_number:{type:DataTypes.INTEGER.UNSIGNED,allowNull:false},chapter_name:{type:DataTypes.STRING(255),allowNull:false},content_type:{type:DataTypes.ENUM("video","pdf","text","link"),allowNull:false},content_url:{type:DataTypes.STRING(500),allowNull:false},...common},{tableName:"chapters"});
-export const Quiz=define("Quiz",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},chapter_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},questions_json:{type:DataTypes.JSON,allowNull:false},passing_score:{type:DataTypes.DECIMAL(5,2),defaultValue:40},...common},{tableName:"quizzes"});
+export const Chapter = define(
+  "Chapter",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    module_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    chapter_number: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+    },
+
+    chapter_name: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    description: {
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
+    },
+
+    duration_minutes: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    is_preview: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "draft",
+        "published",
+      ),
+      allowNull: false,
+      defaultValue: "published",
+    },
+
+    /*
+     * Purane records ke liye temporary compatibility.
+     * Naye resources chapter_resources me save honge.
+     */
+    content_type: {
+      type: DataTypes.ENUM(
+        "video",
+        "pdf",
+        "text",
+        "link",
+      ),
+      allowNull: true,
+    },
+
+    content_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
+
+    ...common,
+  },
+  {
+    tableName: "chapters",
+
+    indexes: [
+      {
+        unique: true,
+        fields: [
+          "module_id",
+          "chapter_number",
+        ],
+      },
+    ],
+  },
+);
+
+export const ChapterResource = define(
+  "ChapterResource",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    chapter_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    title: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    resource_type: {
+      type: DataTypes.ENUM(
+        "video",
+        "pdf",
+        "ppt",
+        "document",
+        "image",
+        "audio",
+        "text",
+        "link",
+        "zip",
+        "source_code",
+        "other",
+      ),
+      allowNull: false,
+    },
+
+    file_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
+
+    external_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
+
+    text_content: {
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
+    },
+
+    file_name: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    mime_type: {
+      type: DataTypes.STRING(150),
+      allowNull: true,
+    },
+
+    file_size: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: true,
+    },
+
+    duration_seconds: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    sort_order: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 1,
+    },
+
+    is_downloadable: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+
+    is_primary: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "active",
+        "inactive",
+      ),
+      allowNull: false,
+      defaultValue: "active",
+    },
+
+    ...common,
+  },
+  {
+    tableName:
+      "chapter_resources",
+
+    indexes: [
+      {
+        fields: [
+          "chapter_id",
+        ],
+      },
+      {
+        fields: [
+          "resource_type",
+        ],
+      },
+    ],
+  },
+);
+
 export const Assignment=define("Assignment",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},chapter_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},question_text:{type:DataTypes.TEXT,allowNull:false},...common},{tableName:"assignments"});
 export const Submission=define("Submission",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},student_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},assignment_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},file_url:{type:DataTypes.STRING(500),allowNull:false},marks:DataTypes.DECIMAL(5,2),status:{type:DataTypes.ENUM("submitted","approved","resubmit"),defaultValue:"submitted"},mentor_comments:DataTypes.TEXT,...common},{tableName:"submissions"});
 export const Attendance = define(
@@ -703,6 +910,8 @@ export const Certificate = define(
     },
     ...common,
   },
+
+  
   {
     tableName: "certificates",
   },
@@ -786,6 +995,21 @@ export const Payment = define(
       type: DataTypes.JSON,
       allowNull: true,
     },
+    receipt_path: {
+  type: DataTypes.STRING(500),
+  allowNull: true,
+},
+
+receipt_generated_at: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
+
+receipt_number: {
+  type: DataTypes.STRING(100),
+  allowNull: true,
+  unique: true,
+},
 
     ...common,
   },
@@ -841,11 +1065,13 @@ export const BulkJob = define(
       primaryKey: true,
       autoIncrement: true,
     },
+
     job_uuid: {
       type: DataTypes.STRING(36),
       unique: true,
       allowNull: false,
     },
+
     type: {
       type: DataTypes.ENUM(
         "attendance",
@@ -863,35 +1089,110 @@ export const BulkJob = define(
       ),
       allowNull: false,
     },
+
     status: {
       type: DataTypes.ENUM(
         "queued",
         "running",
         "completed",
         "failed",
+        "cancelled",
       ),
+      allowNull: false,
       defaultValue: "queued",
     },
+
+    current_step: {
+      type: DataTypes.STRING(150),
+      allowNull: true,
+    },
+
     progress: {
       type: DataTypes.DECIMAL(5, 2),
+      allowNull: false,
       defaultValue: 0,
     },
+
     processed: {
       type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
       defaultValue: 0,
     },
+
     total: {
       type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
       defaultValue: 0,
     },
-    payload: DataTypes.JSON,
-    result: DataTypes.JSON,
-    error_message: DataTypes.TEXT,
-    created_by: DataTypes.BIGINT.UNSIGNED,
+
+    success_count: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    failed_count: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    cancel_requested: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+
+    started_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    finished_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    payload: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+
+    result: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+
+    error_message: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
+    created_by: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: true,
+    },
+
     ...common,
   },
   {
     tableName: "bulk_jobs",
+
+    indexes: [
+      {
+        fields: [
+          "status",
+          "created_at",
+        ],
+      },
+
+      {
+        fields: [
+          "created_by",
+          "created_at",
+        ],
+      },
+    ],
   },
 );
 export const PasswordReset=define("PasswordReset",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},email:{type:DataTypes.STRING(191),allowNull:false},token_hash:{type:DataTypes.STRING(255),allowNull:false},expires_at:{type:DataTypes.DATE,allowNull:false},used_at:DataTypes.DATE,...common},{tableName:"password_resets"});
@@ -1211,4 +1512,78 @@ Submission.belongsTo(Student, {
   as: "student",
 });
 
-export { sequelize };
+Chapter.hasMany(
+  ChapterResource,
+  {
+    foreignKey:
+      "chapter_id",
+    as: "resources",
+    onDelete: "CASCADE",
+  },
+);
+
+ChapterResource.belongsTo(
+  Chapter,
+  {
+    foreignKey:
+      "chapter_id",
+    as: "chapter",
+  },
+);
+
+Chapter.hasOne(Quiz, {
+  foreignKey: "chapter_id",
+  as: "quiz",
+  onDelete: "CASCADE",
+  onUpdate: "CASCADE",
+});
+
+Quiz.belongsTo(Chapter, {
+  foreignKey: "chapter_id",
+  as: "chapter",
+});
+
+Quiz.hasMany(QuizAttempt, {
+  foreignKey: "quiz_id",
+  as: "attempts",
+  onDelete: "CASCADE",
+  onUpdate: "CASCADE",
+});
+
+QuizAttempt.belongsTo(Quiz, {
+  foreignKey: "quiz_id",
+  as: "quiz",
+});
+
+Student.hasMany(QuizAttempt, {
+  foreignKey: "student_id",
+  as: "quiz_attempts",
+  onDelete: "CASCADE",
+  onUpdate: "CASCADE",
+});
+
+QuizAttempt.belongsTo(Student, {
+  foreignKey: "student_id",
+  as: "student",
+});
+
+/*
+|--------------------------------------------------------------------------
+| Quiz Answer Associations
+|--------------------------------------------------------------------------
+*/
+
+QuizAttempt.hasMany(QuizAnswer, {
+  foreignKey: "attempt_id",
+  as: "answers",
+  onDelete: "CASCADE",
+  onUpdate: "CASCADE",
+});
+
+QuizAnswer.belongsTo(QuizAttempt, {
+  foreignKey: "attempt_id",
+  as: "attempt",
+});
+
+export { sequelize , Quiz,QuizAttempt, QuizAnswer,};
+ 

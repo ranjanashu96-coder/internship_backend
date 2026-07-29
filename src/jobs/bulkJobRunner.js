@@ -5,6 +5,9 @@ import archiver from "archiver";
 import { Op } from "sequelize";
 import { v4 as uuid } from "uuid";
 import {
+  getStudentEligibility,
+} from "../services/studentEligibilityService.js";
+import {
   College,
   Mentor,
 } from "../models/index.js";
@@ -148,6 +151,16 @@ const calculateHours = (
   );
 };
 
+class BulkJobCancelledError extends Error {
+  constructor(
+    message = "Bulk job cancelled",
+  ) {
+    super(message);
+    this.name =
+      "BulkJobCancelledError";
+  }
+}
+
 class BulkJobRunner extends EventEmitter {
   constructor() {
     super();
@@ -171,69 +184,410 @@ class BulkJobRunner extends EventEmitter {
   }
 
   async create(
-    type,
-    payload,
-    createdBy,
+  type,
+  payload,
+  createdBy,
+) {
+  if (
+    !BULK_JOB_TYPES.includes(
+      type,
+    )
   ) {
+    throw new Error(
+      `Invalid bulk job type: ${type}`,
+    );
+  }
+
+  const job =
+    await BulkJob.create({
+      job_uuid: uuid(),
+
+      type,
+
+      payload:
+        payload || {},
+
+      created_by:
+        createdBy || null,
+
+      status:
+        "queued",
+
+      current_step:
+        "queued",
+
+      progress: 0,
+      processed: 0,
+      total: 0,
+
+      success_count: 0,
+      failed_count: 0,
+
+      cancel_requested:
+        false,
+
+      started_at:
+        null,
+
+      finished_at:
+        null,
+
+      error_message:
+        null,
+    });
+
+  this.queue.push(
+    job.id,
+  );
+
+  this.emit(
+    "enqueue",
+  );
+
+  return job;
+}
+
+ async resumePendingJobs() {
+  const jobs =
+    await BulkJob.findAll({
+      where: {
+        status: {
+          [Op.in]: [
+            "queued",
+            "running",
+          ],
+        },
+
+        cancel_requested:
+          false,
+      },
+
+      order: [
+        ["id", "ASC"],
+      ],
+    });
+
+  for (
+    const job of jobs
+  ) {
+    await job.update({
+      status:
+        "queued",
+
+      current_step:
+        "resuming",
+
+      error_message:
+        null,
+
+      finished_at:
+        null,
+    });
+
     if (
-      !BULK_JOB_TYPES.includes(type)
+      !this.queue.includes(
+        job.id,
+      )
     ) {
-      throw new Error(
-        `Invalid bulk job type: ${type}`,
+      this.queue.push(
+        job.id,
       );
     }
+  }
 
-    const job =
-      await BulkJob.create({
-        job_uuid: uuid(),
-        type,
-        payload:
-          payload || {},
-        created_by:
-          createdBy || null,
-        status: "queued",
-        progress: 0,
-        processed: 0,
-        total: 0,
-      });
+  if (
+    jobs.length > 0
+  ) {
+    this.emit(
+      "enqueue",
+    );
+  }
 
-    this.queue.push(job.id);
-    this.emit("enqueue");
+  return jobs.length;
+}
+
+async preview(
+  type,
+  payload = {},
+) {
+  if (
+    !BULK_JOB_TYPES.includes(
+      type,
+    )
+  ) {
+    throw new Error(
+      `Invalid bulk job type: ${type}`,
+    );
+  }
+
+  const students =
+    await this.getStudents(
+      payload,
+    );
+
+  let workingDays =
+    null;
+
+  let estimatedRecords =
+    students.length;
+
+  if (
+    type ===
+      "attendance" &&
+    payload.start_date &&
+    payload.end_date
+  ) {
+    const dates =
+      this.dateRange(
+        payload.start_date,
+        payload.end_date,
+        payload,
+      );
+
+    workingDays =
+      dates.length;
+
+    estimatedRecords =
+      students.length *
+      dates.length;
+  }
+
+  return {
+    type,
+
+    matched_students:
+      students.length,
+
+    working_days:
+      workingDays,
+
+    estimated_records:
+      estimatedRecords,
+
+    sample:
+      students
+        .slice(0, 10)
+        .map(
+          (
+            student,
+          ) => ({
+            id:
+              student.id,
+
+            registration_number:
+              student.registration_number,
+
+            student_id:
+              student.student_id ||
+              null,
+
+            name:
+              student.name,
+
+            college_id:
+              student.college_id,
+
+            domain_id:
+              student.domain_id,
+
+            batch_id:
+              student.batch_id,
+
+            mentor_id:
+              student.mentor_id,
+
+            internship_status:
+              student.internship_status,
+
+            payment_status:
+              student.payment_status,
+
+            college:
+              student.college
+                ? {
+                    id:
+                      student
+                        .college
+                        .id,
+
+                    name:
+                      student
+                        .college
+                        .name,
+                  }
+                : null,
+
+            domain:
+              student.domain
+                ? {
+                    id:
+                      student
+                        .domain
+                        .id,
+
+                    name:
+                      student
+                        .domain
+                        .domain_name,
+                  }
+                : null,
+          }),
+        ),
+  };
+}
+
+async setCurrentStep(
+  job,
+  step,
+) {
+  await job.update({
+    current_step:
+      step,
+  });
+}
+
+async assertNotCancelled(
+  job,
+) {
+  await job.reload();
+
+  if (
+    job.cancel_requested ||
+    job.status ===
+      "cancelled"
+  ) {
+    throw new BulkJobCancelledError();
+  }
+}
+
+async cancel(
+  jobUuid,
+) {
+  const job =
+    await BulkJob.findOne({
+      where: {
+        job_uuid:
+          jobUuid,
+      },
+    });
+
+  if (!job) {
+    throw new Error(
+      "Bulk job not found",
+    );
+  }
+
+  if (
+    [
+      "completed",
+      "failed",
+      "cancelled",
+    ].includes(
+      job.status,
+    )
+  ) {
+    throw new Error(
+      `Cannot cancel ${job.status} job`,
+    );
+  }
+
+  /*
+   * Queue me pada hua hai to
+   * immediately hata do.
+   */
+  if (
+    job.status ===
+    "queued"
+  ) {
+    this.queue =
+      this.queue.filter(
+        (jobId) =>
+          Number(
+            jobId,
+          ) !==
+          Number(
+            job.id,
+          ),
+      );
+
+    await job.update({
+      status:
+        "cancelled",
+
+      current_step:
+        "cancelled",
+
+      cancel_requested:
+        true,
+
+      finished_at:
+        new Date(),
+    });
 
     return job;
   }
 
-  async resumePendingJobs() {
-    const jobs =
-      await BulkJob.findAll({
-        where: {
-          status: {
-            [Op.in]: [
-              "queued",
-              "running",
-            ],
-          },
-        },
-        order: [
-          ["id", "ASC"],
-        ],
-      });
+  /*
+   * Running job ko next safe
+   * checkpoint par stop karenge.
+   */
+  await job.update({
+    cancel_requested:
+      true,
 
-    for (const job of jobs) {
-      await job.update({
-        status: "queued",
-        error_message: null,
-      });
+    current_step:
+      "cancellation_requested",
+  });
 
-      this.queue.push(job.id);
-    }
+  return job;
+}
 
-    if (jobs.length > 0) {
-      this.emit("enqueue");
-    }
+getJobStepLabel(
+  type,
+) {
+  const labels = {
+    attendance:
+      "Generating Attendance",
 
-    return jobs.length;
-  }
+    complete_learning:
+      "Completing Learning",
+
+    complete_internship:
+      "Completing Internship",
+
+    assessment:
+      "Generating Assessments",
+
+    publish_results:
+      "Publishing Results",
+
+    acceptance_letters:
+      "Generating Offer Letters",
+
+    internship_reports:
+      "Generating Internship Reports",
+
+    attendance_sheets:
+      "Generating Attendance Sheets",
+
+    log_books:
+      "Generating Logbooks",
+
+    certificates:
+      "Generating Certificates",
+
+    zip_documents:
+      "Creating ZIP File",
+
+    full_internship_process:
+      "Running Full Internship Process",
+  };
+
+  return (
+    labels[type] ||
+    type
+  );
+}
 
   async drain() {
     if (this.running) {
@@ -258,160 +612,285 @@ class BulkJobRunner extends EventEmitter {
     }
   }
 
-  async updateProgress(
+ async updateProgress(
+  job,
+  processed,
+  total,
+  result,
+  metrics = {},
+) {
+  await this.assertNotCancelled(
     job,
+  );
+
+  const progress =
+    total > 0
+      ? Math.min(
+          100,
+          Number(
+            (
+              (
+                processed /
+                total
+              ) *
+              100
+            ).toFixed(2),
+          ),
+        )
+      : 100;
+
+  const updateData = {
     processed,
     total,
-    result,
+    progress,
+  };
+
+  if (
+    result !== undefined
   ) {
-    const progress =
-      total > 0
-        ? Math.min(
-            100,
-            Number(
-              (
-                (
-                  processed /
-                  total
-                ) *
-                100
-              ).toFixed(2),
-            ),
-          )
-        : 100;
-
-    const updateData = {
-      processed,
-      total,
-      progress,
-    };
-
-    if (
-      result !== undefined
-    ) {
-      updateData.result =
-        result;
-    }
-
-    await job.update(
-      updateData,
-    );
+    updateData.result =
+      result;
   }
 
-  async execute(jobId) {
-    const job =
-      await BulkJob.findByPk(
-        jobId,
-      );
+  if (
+    metrics.success_count !==
+    undefined
+  ) {
+    updateData.success_count =
+      metrics.success_count;
+  }
 
-    if (!job) {
+  if (
+    metrics.failed_count !==
+    undefined
+  ) {
+    updateData.failed_count =
+      metrics.failed_count;
+  }
+
+  await job.update(
+    updateData,
+  );
+}
+
+  async execute(
+  jobId,
+) {
+  const job =
+    await BulkJob.findByPk(
+      jobId,
+    );
+
+  if (!job) {
+    return;
+  }
+
+  /*
+   * Job execute hone se pehle
+   * cancel ho chuka hai.
+   */
+  if (
+    job.status ===
+      "cancelled" ||
+    job.cancel_requested
+  ) {
+    return;
+  }
+
+  try {
+    await job.update({
+      status:
+        "running",
+
+      current_step:
+        this.getJobStepLabel(
+          job.type,
+        ),
+
+      progress: 0,
+      processed: 0,
+      total: 0,
+
+      success_count: 0,
+      failed_count: 0,
+
+      cancel_requested:
+        false,
+
+      started_at:
+        new Date(),
+
+      finished_at:
+        null,
+
+      error_message:
+        null,
+    });
+
+    const handlers = {
+      attendance: () =>
+        this.generateAttendance(
+          job,
+        ),
+
+      complete_learning: () =>
+        this.completeLearning(
+          job,
+        ),
+
+      complete_internship: () =>
+        this.completeInternship(
+          job,
+        ),
+
+      assessment: () =>
+        this.generateAssessment(
+          job,
+        ),
+
+      publish_results: () =>
+        this.publishResults(
+          job,
+        ),
+
+      acceptance_letters: () =>
+        this.generateAcceptanceLetters(
+          job,
+        ),
+
+      internship_reports: () =>
+        this.generateInternshipReports(
+          job,
+        ),
+
+      attendance_sheets: () =>
+        this.generateAttendanceSheets(
+          job,
+        ),
+
+      log_books: () =>
+        this.generateLogBooks(
+          job,
+        ),
+
+      certificates: () =>
+        this.generateCertificates(
+          job,
+        ),
+
+      zip_documents: () =>
+        this.generateZip(
+          job,
+        ),
+
+      full_internship_process:
+        () =>
+          this.runFullProcess(
+            job,
+          ),
+    };
+
+    const handler =
+      handlers[
+        job.type
+      ];
+
+    if (!handler) {
+      throw new Error(
+        `Handler not found for ${job.type}`,
+      );
+    }
+
+    await this.assertNotCancelled(
+      job,
+    );
+
+    const result =
+      await handler();
+
+    await this.assertNotCancelled(
+      job,
+    );
+
+    await job.update({
+      status:
+        "completed",
+
+      current_step:
+        "completed",
+
+      progress:
+        100,
+
+      finished_at:
+        new Date(),
+
+      result:
+        result ||
+        job.result,
+
+      success_count:
+        Number(
+          job.total ||
+            job.processed ||
+            0,
+        ),
+
+      error_message:
+        null,
+    });
+  } catch (error) {
+    if (
+      error instanceof
+      BulkJobCancelledError
+    ) {
+      await job.update({
+        status:
+          "cancelled",
+
+        current_step:
+          "cancelled",
+
+        cancel_requested:
+          true,
+
+        finished_at:
+          new Date(),
+      });
+
       return;
     }
 
-    try {
-      await job.update({
-        status: "running",
-        progress: 0,
-        processed: 0,
-        total: 0,
-        error_message: null,
-      });
+    console.error(
+      `Bulk job ${job.job_uuid} failed:`,
+      error,
+    );
 
-      const handlers = {
-        attendance: () =>
-          this.generateAttendance(
-            job,
+    await job.update({
+      status:
+        "failed",
+
+      current_step:
+        "failed",
+
+      failed_count:
+        Math.max(
+          Number(
+            job.failed_count ||
+              0,
           ),
+          1,
+        ),
 
-        complete_learning: () =>
-          this.completeLearning(
-            job,
-          ),
+      error_message:
+        error?.message ||
+        "Bulk job failed",
 
-        complete_internship: () =>
-          this.completeInternship(
-            job,
-          ),
-
-        assessment: () =>
-          this.generateAssessment(
-            job,
-          ),
-
-        publish_results: () =>
-          this.publishResults(
-            job,
-          ),
-
-        acceptance_letters: () =>
-          this.generateAcceptanceLetters(
-            job,
-          ),
-
-        internship_reports: () =>
-          this.generateInternshipReports(
-            job,
-          ),
-
-        attendance_sheets: () =>
-          this.generateAttendanceSheets(
-            job,
-          ),
-
-        log_books: () =>
-          this.generateLogBooks(
-            job,
-          ),
-
-        certificates: () =>
-          this.generateCertificates(
-            job,
-          ),
-
-        zip_documents: () =>
-          this.generateZip(
-            job,
-          ),
-
-        full_internship_process:
-          () =>
-            this.runFullProcess(
-              job,
-            ),
-      };
-
-      const handler =
-        handlers[job.type];
-
-      if (!handler) {
-        throw new Error(
-          `Handler not found for ${job.type}`,
-        );
-      }
-
-      const result =
-        await handler();
-
-      await job.update({
-        status: "completed",
-        progress: 100,
-        result:
-          result ||
-          job.result,
-      });
-    } catch (error) {
-      console.error(
-        `Bulk job ${job.job_uuid} failed:`,
-        error,
-      );
-
-      await job.update({
-        status: "failed",
-        error_message:
-          error.message,
-      });
-    }
+      finished_at:
+        new Date(),
+    });
   }
+}
 
   parseDate(
     value,
@@ -878,6 +1357,41 @@ buildStudentQuery(payload = {}) {
       await this.getStudents(
         payload,
       );
+
+      const stepLabels = {
+  acceptance_letters:
+    "Generating Offer Letters",
+
+  attendance:
+    "Generating Attendance",
+
+  complete_learning:
+    "Completing Learning",
+
+  assessment:
+    "Generating Assessments",
+
+  publish_results:
+    "Publishing Results",
+
+  complete_internship:
+    "Completing Internship",
+
+  attendance_sheets:
+    "Generating Attendance Sheets",
+
+  log_books:
+    "Generating Logbooks",
+
+  internship_reports:
+    "Generating Internship Reports",
+
+  certificates:
+    "Generating Certificates",
+
+  zip_documents:
+    "Creating ZIP Package",
+};
 
     const completedAt =
       this.resolveDateTime(
@@ -2470,6 +2984,25 @@ async generateCertificates(
   let processed = 0;
 
   for (const student of students) {
+    const eligibility =
+  await getStudentEligibility(
+    student.id,
+    student.domain_id,
+  );
+
+if (!eligibility.eligible) {
+  processed += 1;
+
+  if (!options.silent) {
+    await this.updateProgress(
+      job,
+      processed,
+      students.length,
+    );
+  }
+
+  continue;
+}
     const certificateNumber =
       `${
         payload.certificate_prefix ||
@@ -2979,18 +3512,7 @@ async generateCertificates(
             },
           ),
       },
-      {
-        name:
-          "complete_internship",
-        run: () =>
-          this.completeInternship(
-            job,
-            {
-              payload,
-              silent: true,
-            },
-          ),
-      },
+     
       {
         name:
           "attendance_sheets",
@@ -3019,6 +3541,18 @@ async generateCertificates(
           "internship_reports",
         run: () =>
           this.generateInternshipReports(
+            job,
+            {
+              payload,
+              silent: true,
+            },
+          ),
+      },
+       {
+        name:
+          "complete_internship",
+        run: () =>
+          this.completeInternship(
             job,
             {
               payload,
@@ -3056,45 +3590,78 @@ async generateCertificates(
     const failed = [];
 
     for (
-      let index = 0;
-      index < steps.length;
-      index += 1
+  let index = 0;
+  index < steps.length;
+  index += 1
+) {
+  const step =
+    steps[index];
+
+  await this.assertNotCancelled(
+    job,
+  );
+
+  await this.setCurrentStep(
+    job,
+    stepLabels[
+      step.name
+    ] ||
+      step.name,
+  );
+
+  try {
+    const result =
+      await step.run();
+
+    completed.push({
+      name:
+        step.name,
+
+      result,
+    });
+  } catch (error) {
+    /*
+     * Cancellation ko normal
+     * failure me convert mat karo.
+     */
+    if (
+      error instanceof
+      BulkJobCancelledError
     ) {
-      const step =
-        steps[index];
-
-      try {
-        const result =
-          await step.run();
-
-        completed.push({
-          name:
-            step.name,
-          result,
-        });
-      } catch (error) {
-        failed.push({
-          name:
-            step.name,
-          error:
-            error.message,
-        });
-
-        if (
-          payload.stop_on_error !==
-          false
-        ) {
-          throw error;
-        }
-      }
-
-      await this.updateProgress(
-        job,
-        index + 1,
-        steps.length,
-      );
+      throw error;
     }
 
+    failed.push({
+      name:
+        step.name,
+
+      error:
+        error?.message ||
+        "Step failed",
+    });
+
+    if (
+      payload.stop_on_error !==
+      false
+    ) {
+      throw error;
+    }
+  }
+
+  await this.updateProgress(
+    job,
+    index + 1,
+    steps.length,
+    undefined,
+    {
+      success_count:
+        completed.length,
+
+      failed_count:
+        failed.length,
+    },
+  );
+}
     const zipStep =
       completed.find(
         (step) =>

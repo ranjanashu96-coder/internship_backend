@@ -39,10 +39,30 @@ import {
 } from "../controllers/adminMasterController.js";
 
 import {
+  listQuizzes,
+  getQuizById,
+  createQuiz,
+  updateQuiz,
+  deleteQuiz,
+} from "../controllers/adminQuizController.js";
+
+import {
   getMentorAssignableStudents,
   assignStudentsToMentor,
   removeStudentsFromMentor,
 } from "../controllers/mentorAssignmentController.js";
+
+import {
+  listChapterResources,
+  createChapterResource,
+  updateChapterResource,
+  deleteChapterResource,
+  reorderChapterResources,
+} from "../controllers/adminChapterResourceController.js";
+
+import {
+  chapterResourceUpload,
+} from "../utils/chapterResourceUpload.js";
 
 import {
   list,
@@ -91,12 +111,52 @@ router.get(
 |--------------------------------------------------------------------------
 */
 
-router.get("/colleges", list("colleges"));
-router.get("/colleges/:id", getById("colleges"));
-router.post("/colleges", createCollege);
-router.put("/colleges/:id", updateCollege);
-router.patch("/colleges/:id/approve", approveCollege);
-router.delete("/colleges/:id", removeCollege);
+/*
+|--------------------------------------------------------------------------
+| Colleges
+|--------------------------------------------------------------------------
+*/
+
+const collegeLogoUpload = upload(
+  "colleges",
+  [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ],
+);
+
+router.get(
+  "/colleges",
+  list("colleges"),
+);
+
+router.get(
+  "/colleges/:id",
+  getById("colleges"),
+);
+
+router.post(
+  "/colleges",
+  collegeLogoUpload.single("logo"),
+  createCollege,
+);
+
+router.put(
+  "/colleges/:id",
+  collegeLogoUpload.single("logo"),
+  updateCollege,
+);
+
+router.patch(
+  "/colleges/:id/approve",
+  approveCollege,
+);
+
+router.delete(
+  "/colleges/:id",
+  removeCollege,
+);
 
 /*
 |--------------------------------------------------------------------------
@@ -111,17 +171,17 @@ router.put("/mentors/:id", updateMentor);
 router.delete("/mentors/:id", remove("mentors"));
 
 router.get(
-  "/mentors/:mentorId/students",
+  "/mentors/:id/students",
   getMentorAssignableStudents,
 );
 
 router.post(
-  "/mentors/:mentorId/assign-students",
+  "/mentors/:id/assign-students",
   assignStudentsToMentor,
 );
 
 router.post(
-  "/mentors/:mentorId/remove-students",
+  "/mentors/:id/remove-students",
   removeStudentsFromMentor,
 );
 
@@ -234,19 +294,60 @@ router.get(
 
 router.post(
   "/chapters",
-  chapterUpload.single("file"),
+  chapterUpload.none(),
   createChapter,
 );
 
 router.put(
   "/chapters/:id",
-  chapterUpload.single("file"),
+  chapterUpload.none(),
   updateChapter,
 );
 
 router.delete(
   "/chapters/:id",
   deleteChapter,
+);
+
+/*
+|--------------------------------------------------------------------------
+| Chapter Resources
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/chapters/:chapterId/resources",
+  listChapterResources,
+);
+
+router.post(
+  "/chapters/:chapterId/resources",
+
+  chapterResourceUpload.single(
+    "file",
+  ),
+
+  createChapterResource,
+);
+
+router.put(
+  "/chapter-resources/:id",
+
+  chapterResourceUpload.single(
+    "file",
+  ),
+
+  updateChapterResource,
+);
+
+router.delete(
+  "/chapter-resources/:id",
+  deleteChapterResource,
+);
+
+router.put(
+  "/chapters/:chapterId/resources/reorder",
+  reorderChapterResources,
 );
 /*
 |--------------------------------------------------------------------------
@@ -259,6 +360,38 @@ router.get("/assignments/:id", getAssignmentById);
 router.post("/assignments", createAssignment);
 router.put("/assignments/:id", updateAssignment);
 router.delete("/assignments/:id", deleteAssignment);
+
+
+/*
+|--------------------------------------------------------------------------
+| Quiz Management
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/quizzes",
+  listQuizzes,
+);
+
+router.get(
+  "/quizzes/:id",
+  getQuizById,
+);
+
+router.post(
+  "/quizzes",
+  createQuiz,
+);
+
+router.put(
+  "/quizzes/:id",
+  updateQuiz,
+);
+
+router.delete(
+  "/quizzes/:id",
+  deleteQuiz,
+);
 
 /*
 |--------------------------------------------------------------------------

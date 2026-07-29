@@ -30,7 +30,7 @@ export const getMentorAssignableStudents =
     async (req, res) => {
       const mentorId =
         Number(
-          req.params.mentorId,
+         req.params.id
         );
 
       if (
@@ -337,7 +337,7 @@ export const assignStudentsToMentor =
     async (req, res) => {
       const mentorId =
         Number(
-          req.params.mentorId,
+          req.params.id
         );
 
       const studentIds = [
@@ -574,7 +574,7 @@ export const removeStudentsFromMentor =
     async (req, res) => {
       const mentorId =
         Number(
-          req.params.mentorId,
+        req.params.id
         );
 
       const studentIds = [

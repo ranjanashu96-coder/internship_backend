@@ -3,11 +3,13 @@ import fs from "fs";
 import path from "path";
 
 import {
-  Sector,
+   Sector,
   Domain,
   Module,
   Chapter,
+  ChapterResource,
   Assignment,
+  Quiz,
 } from "../models/index.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -1279,34 +1281,41 @@ export const listChapters =
 export const getChapterById =
   asyncHandler(async (req, res) => {
     const chapter =
-      await Chapter.findByPk(
-        req.params.id,
+  await Chapter.findByPk(
+    req.params.id,
+    {
+      include: [
         {
+          model: Module,
+
           include: [
             {
-              model: Module,
-              attributes: [
-                "id",
-                "module_number",
-                "module_name",
-              ],
-              include: [
-                {
-                  model: Domain,
-                  attributes: [
-                    "id",
-                    "domain_name",
-                  ],
-                },
-              ],
-            },
-            {
-              model: Assignment,
-              required: false,
+              model: Domain,
             },
           ],
         },
-      );
+
+        {
+          model:
+            ChapterResource,
+
+          as: "resources",
+
+          required: false,
+        },
+
+        {
+          model: Assignment,
+          required: false,
+        },
+
+        {
+          model: Quiz,
+          required: false,
+        },
+      ],
+    },
+  );
 
     if (!chapter) {
       throw new AppError(
@@ -1321,381 +1330,86 @@ export const getChapterById =
 export const createChapter =
   asyncHandler(
     async (req, res) => {
-      try {
-        const {
-          module_id,
-          domain_id,
-          chapter_number,
-          content_type,
-        } = req.body;
+      console.log("Headers:", req.headers["content-type"]);
+  console.log("Body:", req.body);
+      const moduleId =
+        parsePositiveInteger(
+          req.body.module_id,
+          "Module ID",
+        );
 
-        const chapterName =
-          String(
-            req.body
-              .chapter_name ||
-              "",
-          ).trim();
+      const chapterNumber =
+        parsePositiveInteger(
+          req.body.chapter_number,
+          "Chapter number",
+        );
 
-        if (!module_id) {
-          throw new AppError(
-            "Module is required",
-            422,
+      const chapterName =
+        String(
+          req.body.chapter_name ||
+          "",
+        ).trim();
+
+      if (!chapterName) {
+        throw new AppError(
+          "अध्याय का नाम आवश्यक है",
+          422,
+        );
+      }
+
+      const module =
+        await Module.findByPk(
+          moduleId,
+        );
+
+      if (!module) {
+        throw new AppError(
+          "मॉड्यूल नहीं मिला",
+          404,
+        );
+      }
+
+      if (
+        req.body.domain_id
+      ) {
+        const domainId =
+          parsePositiveInteger(
+            req.body.domain_id,
+            "Domain ID",
           );
-        }
-
-        if (!chapterName) {
-          throw new AppError(
-            "Chapter name is required",
-            422,
-          );
-        }
-
-        const allowedContentTypes =
-          [
-            "video",
-            "pdf",
-            "text",
-            "link",
-          ];
 
         if (
-          !allowedContentTypes
-            .includes(
-              content_type,
-            )
+          Number(
+            module.domain_id,
+          ) !== domainId
         ) {
           throw new AppError(
-            "Invalid content type",
+            "चुना गया मॉड्यूल इस डोमेन से संबंधित नहीं है",
             422,
           );
         }
+      }
 
-        const moduleId =
-          parsePositiveInteger(
-            module_id,
-            "Module ID",
-          );
-
-        const chapterNumber =
-          parsePositiveInteger(
-            chapter_number,
-            "Chapter number",
-          );
-
-        const module =
-          await Module.findByPk(
-            moduleId,
-          );
-
-        if (!module) {
-          throw new AppError(
-            "Module not found",
-            404,
-          );
-        }
-
-        /*
-         * Verify that selected module
-         * belongs to selected domain.
-         */
-        if (domain_id) {
-          const domainId =
-            parsePositiveInteger(
-              domain_id,
-              "Domain ID",
-            );
-
-          if (
-            Number(
-              module.domain_id,
-            ) !== domainId
-          ) {
-            throw new AppError(
-              "Selected module does not belong to the selected domain",
-              422,
-            );
-          }
-        }
-
-        const existing =
-          await Chapter.findOne({
-            where: {
-              module_id:
-                moduleId,
-
-              chapter_number:
-                chapterNumber,
-            },
-          });
-
-        if (existing) {
-          throw new AppError(
-            "Chapter number already exists in this module",
-            409,
-          );
-        }
-
-        let contentUrl;
-
-        if (
-          content_type ===
-          "link"
-        ) {
-          if (req.file) {
-            throw new AppError(
-              "File upload is not allowed for link content",
-              422,
-            );
-          }
-
-          contentUrl =
-            validateExternalUrl(
-              req.body
-                .content_url,
-            );
-        } else {
-          validateChapterFile(
-            content_type,
-            req.file,
-          );
-
-          contentUrl =
-            `/uploads/chapters/${req.file.filename}`;
-        }
-
-        const chapter =
-          await Chapter.create({
+      const existing =
+        await Chapter.findOne({
+          where: {
             module_id:
               moduleId,
 
             chapter_number:
               chapterNumber,
+          },
+        });
 
-            chapter_name:
-              chapterName,
-
-            content_type,
-
-            content_url:
-              contentUrl,
-          });
-
-        return ok(
-          res,
-          chapter,
-          "Chapter created successfully",
-          201,
+      if (existing) {
+        throw new AppError(
+          "इस मॉड्यूल में यह अध्याय क्रमांक पहले से मौजूद है",
+          409,
         );
-      } catch (error) {
-        removeRequestFile(
-          req.file,
-        );
-
-        throw error;
       }
-    },
-  );
 
-export const updateChapter =
-  asyncHandler(
-    async (req, res) => {
-      let newFileSaved =
-        false;
-
-      try {
-        const chapter =
-          await Chapter.findByPk(
-            req.params.id,
-          );
-
-        if (!chapter) {
-          throw new AppError(
-            "Chapter not found",
-            404,
-          );
-        }
-
-        const oldContentUrl =
-          chapter.content_url;
-
-        const moduleId =
-          req.body.module_id !==
-          undefined
-            ? parsePositiveInteger(
-                req.body
-                  .module_id,
-                "Module ID",
-              )
-            : Number(
-                chapter.module_id,
-              );
-
-        const chapterNumber =
-          req.body
-            .chapter_number !==
-          undefined
-            ? parsePositiveInteger(
-                req.body
-                  .chapter_number,
-                "Chapter number",
-              )
-            : Number(
-                chapter.chapter_number,
-              );
-
-        const chapterName =
-          req.body
-            .chapter_name !==
-          undefined
-            ? String(
-                req.body
-                  .chapter_name,
-              ).trim()
-            : chapter.chapter_name;
-
-        const contentType =
-          req.body
-            .content_type ||
-          chapter.content_type;
-
-        if (!chapterName) {
-          throw new AppError(
-            "Chapter name is required",
-            422,
-          );
-        }
-
-        if (
-          ![
-            "video",
-            "pdf",
-            "text",
-            "link",
-          ].includes(
-            contentType,
-          )
-        ) {
-          throw new AppError(
-            "Invalid content type",
-            422,
-          );
-        }
-
-        const module =
-          await Module.findByPk(
-            moduleId,
-          );
-
-        if (!module) {
-          throw new AppError(
-            "Module not found",
-            404,
-          );
-        }
-
-        if (
-          req.body.domain_id
-        ) {
-          const domainId =
-            parsePositiveInteger(
-              req.body
-                .domain_id,
-              "Domain ID",
-            );
-
-          if (
-            Number(
-              module.domain_id,
-            ) !== domainId
-          ) {
-            throw new AppError(
-              "Selected module does not belong to the selected domain",
-              422,
-            );
-          }
-        }
-
-        const existing =
-          await Chapter.findOne({
-            where: {
-              module_id:
-                moduleId,
-
-              chapter_number:
-                chapterNumber,
-
-              id: {
-                [Op.ne]:
-                  chapter.id,
-              },
-            },
-          });
-
-        if (existing) {
-          throw new AppError(
-            "Chapter number already exists in this module",
-            409,
-          );
-        }
-
-        let contentUrl =
-          oldContentUrl;
-
-        if (
-          contentType ===
-          "link"
-        ) {
-          if (req.file) {
-            throw new AppError(
-              "File upload is not allowed for link content",
-              422,
-            );
-          }
-
-          const submittedUrl =
-            String(
-              req.body
-                .content_url ||
-                "",
-            ).trim();
-
-          if (submittedUrl) {
-            contentUrl =
-              validateExternalUrl(
-                submittedUrl,
-              );
-          } else if (
-            chapter.content_type !==
-            "link"
-          ) {
-            throw new AppError(
-              "Content link is required",
-              422,
-            );
-          }
-        } else if (req.file) {
-          validateChapterFile(
-            contentType,
-            req.file,
-          );
-
-          contentUrl =
-            `/uploads/chapters/${req.file.filename}`;
-
-          newFileSaved = true;
-        } else if (
-          chapter.content_type ===
-            "link" ||
-          chapter.content_type !==
-            contentType
-        ) {
-          throw new AppError(
-            `Upload a ${contentType} file`,
-            422,
-          );
-        }
-
-        await chapter.update({
+      const chapter =
+        await Chapter.create({
           module_id:
             moduleId,
 
@@ -1705,43 +1419,200 @@ export const updateChapter =
           chapter_name:
             chapterName,
 
+          description:
+            String(
+              req.body.description ||
+              "",
+            ).trim() ||
+            null,
+
+          duration_minutes:
+            Math.max(
+              0,
+              Number(
+                req.body.duration_minutes ||
+                0,
+              ),
+            ),
+
+          is_preview:
+            [
+              true,
+              "true",
+              1,
+              "1",
+            ].includes(
+              req.body.is_preview,
+            ),
+
+          status:
+            req.body.status ===
+            "draft"
+              ? "draft"
+              : "published",
+
           content_type:
-            contentType,
+            null,
 
           content_url:
-            contentUrl,
+            null,
         });
 
-        /*
-         * Delete the previous uploaded
-         * file after successful update.
-         */
-        if (
-          oldContentUrl !==
-          contentUrl
-        ) {
-          removeStoredChapterFile(
-            oldContentUrl,
-          );
-        }
+      ok(
+        res,
+        chapter,
+        "अध्याय सफलतापूर्वक बनाया गया",
+        201,
+      );
+    },
+  );
 
-        return ok(
-          res,
-          chapter,
-          "Chapter updated successfully",
+export const updateChapter =
+  asyncHandler(
+    async (req, res) => {
+      const chapter =
+        await Chapter.findByPk(
+          req.params.id,
         );
-      } catch (error) {
-        if (
-          req.file &&
-          !newFileSaved
-        ) {
-          removeRequestFile(
-            req.file,
-          );
-        }
 
-        throw error;
+      if (!chapter) {
+        throw new AppError(
+          "अध्याय नहीं मिला",
+          404,
+        );
       }
+
+      const moduleId =
+        req.body.module_id !==
+        undefined
+          ? parsePositiveInteger(
+              req.body.module_id,
+              "Module ID",
+            )
+          : Number(
+              chapter.module_id,
+            );
+
+      const chapterNumber =
+        req.body.chapter_number !==
+        undefined
+          ? parsePositiveInteger(
+              req.body.chapter_number,
+              "Chapter number",
+            )
+          : Number(
+              chapter.chapter_number,
+            );
+
+      const chapterName =
+        req.body.chapter_name !==
+        undefined
+          ? String(
+              req.body.chapter_name,
+            ).trim()
+          : chapter.chapter_name;
+
+      if (!chapterName) {
+        throw new AppError(
+          "अध्याय का नाम आवश्यक है",
+          422,
+        );
+      }
+
+      const module =
+        await Module.findByPk(
+          moduleId,
+        );
+
+      if (!module) {
+        throw new AppError(
+          "मॉड्यूल नहीं मिला",
+          404,
+        );
+      }
+
+      const existing =
+        await Chapter.findOne({
+          where: {
+            module_id:
+              moduleId,
+
+            chapter_number:
+              chapterNumber,
+
+            id: {
+              [Op.ne]:
+                chapter.id,
+            },
+          },
+        });
+
+      if (existing) {
+        throw new AppError(
+          "इस मॉड्यूल में यह अध्याय क्रमांक पहले से मौजूद है",
+          409,
+        );
+      }
+
+      await chapter.update({
+        module_id:
+          moduleId,
+
+        chapter_number:
+          chapterNumber,
+
+        chapter_name:
+          chapterName,
+
+        description:
+          req.body.description !==
+          undefined
+            ? String(
+                req.body.description ||
+                "",
+              ).trim() ||
+              null
+            : chapter.description,
+
+        duration_minutes:
+          req.body.duration_minutes !==
+          undefined
+            ? Math.max(
+                0,
+                Number(
+                  req.body.duration_minutes,
+                ),
+              )
+            : chapter.duration_minutes,
+
+        is_preview:
+          req.body.is_preview !==
+          undefined
+            ? [
+                true,
+                "true",
+                1,
+                "1",
+              ].includes(
+                req.body.is_preview,
+              )
+            : chapter.is_preview,
+
+        status:
+          req.body.status ===
+          "draft"
+            ? "draft"
+            : req.body.status ===
+                "published"
+              ? "published"
+              : chapter.status,
+      });
+
+      ok(
+        res,
+        chapter,
+        "अध्याय सफलतापूर्वक अपडेट किया गया",
+      );
     },
   );
 

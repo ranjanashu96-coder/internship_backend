@@ -3,11 +3,14 @@ import fs from "fs";
 import path from "path";
 
 import {
-  Student,
+   Student,
   College,
   Domain,
   Module,
   Chapter,
+  ChapterResource,
+  Quiz,
+  QuizAttempt,
   ChapterCompletion,
   Assignment,
   Submission,
@@ -101,6 +104,450 @@ const limitPercentage = (value) => {
     100,
     Math.max(0, toNumber(value)),
   );
+};
+
+const getStudentEligibility = async (
+  studentId,
+  domainId,
+) => {
+  /*
+  |--------------------------------------------------------------------------
+  | Chapters
+  |--------------------------------------------------------------------------
+  */
+
+  const chapterIds =
+    await getStudentChapterIds(
+      domainId,
+    );
+
+  const validChapterIds =
+    chapterIds.length > 0
+      ? chapterIds
+      : [0];
+
+  const totalChapters =
+    chapterIds.length;
+
+  const completedChapters =
+    await ChapterCompletion.count({
+      where: {
+        student_id: studentId,
+
+        chapter_id: {
+          [Op.in]:
+            validChapterIds,
+        },
+
+        status: "completed",
+      },
+
+      distinct: true,
+      col: "chapter_id",
+    });
+
+  /*
+  |--------------------------------------------------------------------------
+  | Quizzes
+  |--------------------------------------------------------------------------
+  */
+
+  const quizzes =
+    await Quiz.findAll({
+      where: {
+        chapter_id: {
+          [Op.in]:
+            validChapterIds,
+        },
+
+        status: "active",
+      },
+
+      attributes: [
+        "id",
+      ],
+    });
+
+  const quizIds =
+    quizzes.map(
+      (quiz) =>
+        Number(quiz.id),
+    );
+
+  const passedQuizIds =
+    quizIds.length > 0
+      ? await QuizAttempt.findAll({
+          where: {
+            student_id:
+              studentId,
+
+            quiz_id: {
+              [Op.in]:
+                quizIds,
+            },
+
+            status:
+              "submitted",
+
+            passed: true,
+          },
+
+          attributes: [
+            "quiz_id",
+          ],
+
+          group: [
+            "quiz_id",
+          ],
+        })
+      : [];
+
+  const totalQuizzes =
+    quizIds.length;
+
+  const quizzesPassed =
+    passedQuizIds.length;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Assignments
+  |--------------------------------------------------------------------------
+  */
+
+  const assignments =
+    await Assignment.findAll({
+      where: {
+        chapter_id: {
+          [Op.in]:
+            validChapterIds,
+        },
+      },
+
+      attributes: [
+        "id",
+      ],
+    });
+
+  const assignmentIds =
+    assignments.map(
+      (assignment) =>
+        Number(
+          assignment.id,
+        ),
+    );
+
+  const totalAssignments =
+    assignmentIds.length;
+
+  const approvedAssignments =
+    assignmentIds.length > 0
+      ? await Submission.count({
+          where: {
+            student_id:
+              studentId,
+
+            assignment_id: {
+              [Op.in]:
+                assignmentIds,
+            },
+
+            status:
+              "approved",
+          },
+
+          distinct: true,
+          col: "assignment_id",
+        })
+      : 0;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Student + Required Hours
+  |--------------------------------------------------------------------------
+  */
+
+  const student =
+    await Student.findByPk(
+      studentId,
+      {
+        attributes: [
+          "id",
+          "domain_id",
+        ],
+
+        include: [
+          {
+            model: Domain,
+            as: "domain",
+
+            attributes: [
+              "id",
+              "duration_hours",
+            ],
+          },
+        ],
+      },
+    );
+
+  const requiredHours =
+    toNumber(
+      student?.domain
+        ?.duration_hours,
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Attendance + Learning Hours
+  |--------------------------------------------------------------------------
+  */
+
+  const attendanceRecords =
+    await Attendance.findAll({
+      where: {
+        student_id:
+          studentId,
+      },
+
+      attributes: [
+        "status",
+        "learning_hours",
+      ],
+    });
+
+  const totalAttendanceDays =
+    attendanceRecords.length;
+
+  const presentDays =
+    attendanceRecords.filter(
+      (record) =>
+        record.status ===
+        "present",
+    ).length;
+
+  const halfDays =
+    attendanceRecords.filter(
+      (record) =>
+        record.status ===
+        "half_day",
+    ).length;
+
+  const effectivePresentDays =
+    presentDays +
+    halfDays * 0.5;
+
+  const attendancePercentage =
+    calculatePercentage(
+      effectivePresentDays,
+      totalAttendanceDays,
+    );
+
+  const completedHours =
+    attendanceRecords.reduce(
+      (total, record) =>
+        total +
+        toNumber(
+          record.learning_hours,
+        ),
+      0,
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Minimum Attendance
+  |--------------------------------------------------------------------------
+  |
+  | Change this value later if required.
+  |
+  */
+
+  const minimumAttendance = 75;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Live Project
+  |--------------------------------------------------------------------------
+  */
+
+  const projectApproved =
+    Boolean(
+      await LiveProject.findOne({
+        where: {
+          student_id:
+            studentId,
+
+          status:
+            "approved",
+        },
+
+        attributes: [
+          "id",
+        ],
+      }),
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Internship Report
+  |--------------------------------------------------------------------------
+  */
+
+  const reportApproved =
+    Boolean(
+      await InternshipReport.findOne({
+        where: {
+          student_id:
+            studentId,
+
+          status:
+            "approved",
+        },
+
+        attributes: [
+          "id",
+        ],
+      }),
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Eligibility Checks
+  |--------------------------------------------------------------------------
+  */
+
+  const checks = {
+    chapters_completed:
+      totalChapters === 0 ||
+      completedChapters >=
+        totalChapters,
+
+    quizzes_passed:
+      totalQuizzes === 0 ||
+      quizzesPassed >=
+        totalQuizzes,
+
+    assignments_completed:
+      totalAssignments === 0 ||
+      approvedAssignments >=
+        totalAssignments,
+
+    required_hours_completed:
+      requiredHours <= 0 ||
+      completedHours >=
+        requiredHours,
+
+    attendance_completed:
+      totalAttendanceDays > 0 &&
+      attendancePercentage >=
+        minimumAttendance,
+
+    project_approved:
+      projectApproved,
+
+    report_approved:
+      reportApproved,
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Final Eligibility
+  |--------------------------------------------------------------------------
+  */
+
+  const eligible =
+    Object.values(
+      checks,
+    ).every(Boolean);
+
+  return {
+    eligible,
+
+    checks,
+
+    progress: {
+      chapters: {
+        total:
+          totalChapters,
+
+        completed:
+          completedChapters,
+
+        percentage:
+          calculatePercentage(
+            completedChapters,
+            totalChapters,
+          ),
+      },
+
+      quizzes: {
+        total:
+          totalQuizzes,
+
+        passed:
+          quizzesPassed,
+
+        percentage:
+          calculatePercentage(
+            quizzesPassed,
+            totalQuizzes,
+          ),
+      },
+
+      assignments: {
+        total:
+          totalAssignments,
+
+        approved:
+          approvedAssignments,
+
+        percentage:
+          calculatePercentage(
+            approvedAssignments,
+            totalAssignments,
+          ),
+      },
+
+      learning_hours: {
+        required:
+          requiredHours,
+
+        completed:
+          Number(
+            completedHours.toFixed(
+              2,
+            ),
+          ),
+
+        remaining:
+          Number(
+            Math.max(
+              requiredHours -
+                completedHours,
+              0,
+            ).toFixed(2),
+          ),
+
+        percentage:
+          calculatePercentage(
+            completedHours,
+            requiredHours,
+          ),
+      },
+
+      attendance: {
+        total_days:
+          totalAttendanceDays,
+
+        effective_present_days:
+          effectivePresentDays,
+
+        percentage:
+          attendancePercentage,
+
+        minimum_required:
+          minimumAttendance,
+      },
+    },
+  };
 };
 
 const getStudentChapterIds = async (
@@ -314,7 +761,7 @@ export const dashboard = asyncHandler(
         include: [
           {
             model: College,
-             as: "college",
+            as: "college",
             attributes: [
               "id",
               "name",
@@ -323,7 +770,6 @@ export const dashboard = asyncHandler(
               "logo",
             ],
           },
-
           {
             model: Domain,
             as: "domain",
@@ -337,6 +783,12 @@ export const dashboard = asyncHandler(
         ],
       });
 
+    /*
+    |--------------------------------------------------------------------------
+    | Student Domain Chapters
+    |--------------------------------------------------------------------------
+    */
+
     const chapterIds =
       await getStudentChapterIds(
         student.domain_id,
@@ -346,6 +798,41 @@ export const dashboard = asyncHandler(
       chapterIds.length > 0
         ? chapterIds
         : [0];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Active Domain Quizzes
+    |--------------------------------------------------------------------------
+    */
+
+    const domainQuizzes =
+      await Quiz.findAll({
+        where: {
+          chapter_id: {
+            [Op.in]:
+              validChapterIds,
+          },
+
+          status: "active",
+        },
+
+        attributes: [
+          "id",
+          "chapter_id",
+        ],
+      });
+
+    const quizIds =
+      domainQuizzes.map(
+        (quiz) =>
+          Number(quiz.id),
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Data
+    |--------------------------------------------------------------------------
+    */
 
     const [
       completedChapterCount,
@@ -359,13 +846,18 @@ export const dashboard = asyncHandler(
       certificate,
       latestPayment,
       recentActivities,
+      quizAttempts,
     ] = await Promise.all([
       ChapterCompletion.count({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
+
           chapter_id: {
-            [Op.in]: validChapterIds,
+            [Op.in]:
+              validChapterIds,
           },
+
           status: "completed",
         },
 
@@ -376,14 +868,17 @@ export const dashboard = asyncHandler(
       Assignment.count({
         where: {
           chapter_id: {
-            [Op.in]: validChapterIds,
+            [Op.in]:
+              validChapterIds,
           },
         },
       }),
 
       Submission.count({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
+
           status: "approved",
         },
 
@@ -393,7 +888,8 @@ export const dashboard = asyncHandler(
 
       Submission.count({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         distinct: true,
@@ -402,7 +898,8 @@ export const dashboard = asyncHandler(
 
       Attendance.findAll({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -412,12 +909,15 @@ export const dashboard = asyncHandler(
           "learning_hours",
         ],
 
-        order: [["date", "DESC"]],
+        order: [
+          ["date", "DESC"],
+        ],
       }),
 
       Logbook.findAll({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -426,12 +926,15 @@ export const dashboard = asyncHandler(
           "hours_worked",
         ],
 
-        order: [["date", "DESC"]],
+        order: [
+          ["date", "DESC"],
+        ],
       }),
 
       LiveProject.findOne({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -444,12 +947,15 @@ export const dashboard = asyncHandler(
           "updated_at",
         ],
 
-        order: [["created_at", "DESC"]],
+        order: [
+          ["created_at", "DESC"],
+        ],
       }),
 
       InternshipReport.findOne({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -461,12 +967,15 @@ export const dashboard = asyncHandler(
           "updated_at",
         ],
 
-        order: [["created_at", "DESC"]],
+        order: [
+          ["created_at", "DESC"],
+        ],
       }),
 
       Certificate.findOne({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -480,7 +989,8 @@ export const dashboard = asyncHandler(
 
       Payment.findOne({
         where: {
-          student_id: student.id,
+          student_id:
+            student.id,
         },
 
         attributes: [
@@ -491,14 +1001,162 @@ export const dashboard = asyncHandler(
           "created_at",
         ],
 
-        order: [["created_at", "DESC"]],
+        order: [
+          ["created_at", "DESC"],
+        ],
       }),
 
       buildRecentActivities(
         student.id,
         chapterIds,
       ),
+
+      /*
+      |--------------------------------------------------------------------------
+      | Quiz Attempts
+      |--------------------------------------------------------------------------
+      */
+
+      quizIds.length > 0
+        ? QuizAttempt.findAll({
+            where: {
+              student_id:
+                student.id,
+
+              quiz_id: {
+                [Op.in]:
+                  quizIds,
+              },
+
+              status:
+                "submitted",
+            },
+
+            attributes: [
+              "id",
+              "quiz_id",
+              "percentage",
+              "passed",
+              "attempt_number",
+            ],
+          })
+        : Promise.resolve([]),
     ]);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Group Quiz Attempts
+    |--------------------------------------------------------------------------
+    */
+
+    const attemptsByQuiz =
+      new Map();
+
+    for (
+      const attempt of
+      quizAttempts
+    ) {
+      const currentQuizId =
+        Number(
+          attempt.quiz_id,
+        );
+
+      if (
+        !attemptsByQuiz.has(
+          currentQuizId,
+        )
+      ) {
+        attemptsByQuiz.set(
+          currentQuizId,
+          [],
+        );
+      }
+
+      attemptsByQuiz
+        .get(currentQuizId)
+        .push(attempt);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Quiz Statistics
+    |--------------------------------------------------------------------------
+    */
+
+    let quizzesPassed = 0;
+    let totalBestScore = 0;
+    let scoredQuizzes = 0;
+
+    for (
+      const currentQuizId of
+      quizIds
+    ) {
+      const attempts =
+        attemptsByQuiz.get(
+          currentQuizId,
+        ) || [];
+
+      if (
+        attempts.length === 0
+      ) {
+        continue;
+      }
+
+      const bestScore =
+        Math.max(
+          ...attempts.map(
+            (attempt) =>
+              toNumber(
+                attempt.percentage,
+              ),
+          ),
+        );
+
+      totalBestScore +=
+        bestScore;
+
+      scoredQuizzes += 1;
+
+      const passed =
+        attempts.some(
+          (attempt) =>
+            Boolean(
+              attempt.passed,
+            ),
+        );
+
+      if (passed) {
+        quizzesPassed += 1;
+      }
+    }
+
+    const totalQuizzes =
+      quizIds.length;
+
+    const quizProgress =
+      calculatePercentage(
+        quizzesPassed,
+        totalQuizzes,
+      );
+
+    const quizAverage =
+      scoredQuizzes > 0
+        ? Number(
+            (
+              totalBestScore /
+              scoredQuizzes
+            ).toFixed(2),
+          )
+        : 0;
+
+    const totalQuizAttempts =
+      quizAttempts.length;
+
+    /*
+    |--------------------------------------------------------------------------
+    | Chapter Progress
+    |--------------------------------------------------------------------------
+    */
 
     const totalChapters =
       chapterIds.length;
@@ -509,30 +1167,47 @@ export const dashboard = asyncHandler(
         totalChapters,
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Attendance
+    |--------------------------------------------------------------------------
+    */
+
     const totalAttendanceDays =
       attendanceRecords.length;
 
     const presentDays =
       attendanceRecords.filter(
         (record) =>
-          record.status === "present",
+          record.status ===
+          "present",
       ).length;
 
     const absentDays =
       attendanceRecords.filter(
         (record) =>
-          record.status === "absent",
+          record.status ===
+          "absent",
       ).length;
 
     const leaveDays =
       attendanceRecords.filter(
         (record) =>
-          record.status === "leave",
+          record.status ===
+          "leave",
+      ).length;
+
+    const halfDays =
+      attendanceRecords.filter(
+        (record) =>
+          record.status ===
+          "half_day",
       ).length;
 
     const attendancePercentage =
       calculatePercentage(
-        presentDays,
+        presentDays +
+          halfDays * 0.5,
         totalAttendanceDays,
       );
 
@@ -546,6 +1221,12 @@ export const dashboard = asyncHandler(
         0,
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Logbook
+    |--------------------------------------------------------------------------
+    */
+
     const logbookHours =
       logbookEntries.reduce(
         (total, logbook) =>
@@ -556,14 +1237,30 @@ export const dashboard = asyncHandler(
         0,
       );
 
-    const requiredHours = toNumber(
-      student.domain?.duration_hours,
-    );
+    /*
+    |--------------------------------------------------------------------------
+    | Required Learning Hours
+    |--------------------------------------------------------------------------
+    */
 
-    const hoursRemaining = Math.max(
-      requiredHours - learningHours,
-      0,
-    );
+    const requiredHours =
+      toNumber(
+        student.domain
+          ?.duration_hours,
+      );
+
+    const hoursRemaining =
+      Math.max(
+        requiredHours -
+          learningHours,
+        0,
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Assignment Progress
+    |--------------------------------------------------------------------------
+    */
 
     const assignmentProgress =
       calculatePercentage(
@@ -571,8 +1268,15 @@ export const dashboard = asyncHandler(
         totalAssignmentCount,
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Project / Report Progress
+    |--------------------------------------------------------------------------
+    */
+
     const projectProgress =
-      liveProject?.status === "approved"
+      liveProject?.status ===
+      "approved"
         ? 100
         : liveProject
           ? 50
@@ -587,81 +1291,155 @@ export const dashboard = asyncHandler(
           : 0;
 
     /*
-     * Overall progress calculation:
-     * Learning: 50%
-     * Attendance: 20%
-     * Assignments: 20%
-     * Live project: 5%
-     * Internship report: 5%
-     */
+    |--------------------------------------------------------------------------
+    | Overall Progress
+    |--------------------------------------------------------------------------
+    */
+
     const overallProgress =
       limitPercentage(
         Number(
           (
-            courseProgress * 0.5 +
+            courseProgress *
+              0.5 +
             attendancePercentage *
               0.2 +
             assignmentProgress *
               0.2 +
-            projectProgress * 0.05 +
-            reportProgress * 0.05
+            projectProgress *
+              0.05 +
+            reportProgress *
+              0.05
           ).toFixed(2),
         ),
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Internship Eligibility
+    |--------------------------------------------------------------------------
+    */
+
+    const eligibility =
+      await getStudentEligibility(
+        student.id,
+        student.domain_id,
+      );
+
+      if (
+  eligibility.eligible &&
+  student.internship_status !== "completed"
+) {
+  await student.update({
+    internship_status: "completed",
+    internship_end_date:  new Date()
+        .toISOString()
+        .slice(0, 10),
+  });
+}
+
+    /*
+    |--------------------------------------------------------------------------
+    | Response
+    |--------------------------------------------------------------------------
+    */
+
     return ok(res, {
       student: {
-        id: student.id,
+        id:
+          student.id,
+
         registration_number:
           student.registration_number,
+
         student_id:
           student.student_id,
-        name: student.name,
+
+        name:
+          student.name,
+
         father_name:
           student.father_name,
-        email: student.email,
-        mobile: student.mobile,
-        photo: student.photo,
+
+        email:
+          student.email,
+
+        mobile:
+          student.mobile,
+
+        photo:
+          student.photo,
+
         programme:
           student.programme,
+
         major_subject:
           student.major_subject,
-        session: student.session,
-        semester: student.semester,
+
+        session:
+          student.session,
+
+        semester:
+          student.semester,
+
         internship_status:
           student.internship_status,
+
         payment_status:
           student.payment_status,
 
-        college: student.College
-        
-          ? {
-              id: student.College.id,
-              name: student.College.name,
-              code: student.College.code,
-              university:
-                student.College
-                  .university,
-              logo: student.College.logo,
-            }
-          : null,
+        college:
+          student.college
+            ? {
+                id:
+                  student
+                    .college.id,
 
-        domain: student.domain
-          ? {
-              id: student.domain.id,
-              domain_name:
-                student.domain
-                  .domain_name,
-              duration_hours:
-                toNumber(
-                  student.domain
-                    .duration_hours,
-                ),
-              fee: toNumber(
-                student.domain.fee,
-              ),
-            }
-          : null,
+                name:
+                  student
+                    .college.name,
+
+                code:
+                  student
+                    .college.code,
+
+                university:
+                  student
+                    .college
+                    .university,
+
+                logo:
+                  student
+                    .college.logo,
+              }
+            : null,
+
+        domain:
+          student.domain
+            ? {
+                id:
+                  student
+                    .domain.id,
+
+                domain_name:
+                  student
+                    .domain
+                    .domain_name,
+
+                duration_hours:
+                  toNumber(
+                    student
+                      .domain
+                      .duration_hours,
+                  ),
+
+                fee:
+                  toNumber(
+                    student
+                      .domain.fee,
+                  ),
+              }
+            : null,
       },
 
       stats: {
@@ -674,127 +1452,215 @@ export const dashboard = asyncHandler(
         overall_progress:
           overallProgress,
 
-        learning_hours: Number(
-          learningHours.toFixed(2),
-        ),
-
-        required_hours:
-          requiredHours,
-
-        hours_remaining: Number(
-          hoursRemaining.toFixed(2),
-        ),
-
-        logbook_hours: Number(
-          logbookHours.toFixed(2),
-        ),
-
-        logbook_entries:
-          logbookEntries.length,
-
-        assignments_completed:
-          approvedSubmissionCount,
-
-        assignments_submitted:
-          submittedAssignmentCount,
-
-        assignments_total:
-          totalAssignmentCount,
-
-        assignment_progress:
-          assignmentProgress,
-
         completed_chapters:
           completedChapterCount,
 
         total_chapters:
           totalChapters,
+
+        remaining_chapters:
+          Math.max(
+            totalChapters -
+              completedChapterCount,
+            0,
+          ),
+
+        learning_hours:
+          Number(
+            learningHours.toFixed(
+              2,
+            ),
+          ),
+
+        required_hours:
+          requiredHours,
+
+        hours_remaining:
+          Number(
+            hoursRemaining.toFixed(
+              2,
+            ),
+          ),
+
+        logbook_hours:
+          Number(
+            logbookHours.toFixed(
+              2,
+            ),
+          ),
+
+        logbook_entries:
+          logbookEntries.length,
+
+        assignments_total:
+          totalAssignmentCount,
+
+        assignments_submitted:
+          submittedAssignmentCount,
+
+        assignments_completed:
+          approvedSubmissionCount,
+
+        assignment_progress:
+          assignmentProgress,
+
+        /*
+        |--------------------------------------------------------------------------
+        | Quiz Stats
+        |--------------------------------------------------------------------------
+        */
+
+        total_quizzes:
+          totalQuizzes,
+
+        quizzes_passed:
+          quizzesPassed,
+
+        quizzes_remaining:
+          Math.max(
+            totalQuizzes -
+              quizzesPassed,
+            0,
+          ),
+
+        quiz_progress:
+          quizProgress,
+
+        quiz_average:
+          quizAverage,
+
+        total_quiz_attempts:
+          totalQuizAttempts,
       },
 
       attendance_summary: {
         total_days:
           totalAttendanceDays,
-        present_days: presentDays,
-        absent_days: absentDays,
-        leave_days: leaveDays,
+
+        present_days:
+          presentDays,
+
+        absent_days:
+          absentDays,
+
+        leave_days:
+          leaveDays,
+
+        half_days:
+          halfDays,
+
         percentage:
           attendancePercentage,
       },
 
       status: {
-        project: liveProject
-          ? {
-              id: liveProject.id,
-              title:
-                liveProject.title,
-              status:
-                liveProject.status,
-              report_url:
-                liveProject.report_url,
-              mentor_feedback:
-                liveProject
-                  .mentor_feedback,
-              submitted_at:
-                liveProject.created_at,
-            }
-          : null,
+        project:
+          liveProject
+            ? {
+                id:
+                  liveProject.id,
 
-        report: internshipReport
-          ? {
-              id:
-                internshipReport.id,
-              status:
-                internshipReport
-                  .status,
-              report_url:
-                internshipReport
-                  .report_url,
-              mentor_remarks:
-                internshipReport
-                  .mentor_remarks,
-              submitted_at:
-                internshipReport
-                  .created_at,
-            }
-          : null,
+                title:
+                  liveProject.title,
 
-        certificate: certificate
-          ? {
-              available: true,
-              certificate_number:
-                certificate
-                  .certificate_number,
-              qr_code_url:
-                certificate
-                  .qr_code_url,
-              issued_date:
-                certificate
-                  .issued_date,
-            }
-          : {
-              available: false,
-              certificate_number:
-                null,
-              qr_code_url: null,
-              issued_date: null,
-            },
+                status:
+                  liveProject.status,
 
-        payment: latestPayment
-          ? {
-              amount: toNumber(
-                latestPayment.amount,
-              ),
-              transaction_id:
-                latestPayment
-                  .transaction_id,
-              status:
-                latestPayment.status,
-              date:
-                latestPayment
-                  .created_at,
-            }
-          : null,
+                report_url:
+                  liveProject
+                    .report_url,
+
+                mentor_feedback:
+                  liveProject
+                    .mentor_feedback,
+
+                submitted_at:
+                  liveProject
+                    .created_at,
+              }
+            : null,
+
+        report:
+          internshipReport
+            ? {
+                id:
+                  internshipReport.id,
+
+                status:
+                  internshipReport
+                    .status,
+
+                report_url:
+                  internshipReport
+                    .report_url,
+
+                mentor_remarks:
+                  internshipReport
+                    .mentor_remarks,
+
+                submitted_at:
+                  internshipReport
+                    .created_at,
+              }
+            : null,
+
+        certificate:
+          certificate
+            ? {
+                available:
+                  true,
+
+                certificate_number:
+                  certificate
+                    .certificate_number,
+
+                qr_code_url:
+                  certificate
+                    .qr_code_url,
+
+                issued_date:
+                  certificate
+                    .issued_date,
+              }
+            : {
+                available:
+                  false,
+
+                certificate_number:
+                  null,
+
+                qr_code_url:
+                  null,
+
+                issued_date:
+                  null,
+              },
+
+        payment:
+          latestPayment
+            ? {
+                amount:
+                  toNumber(
+                    latestPayment
+                      .amount,
+                  ),
+
+                transaction_id:
+                  latestPayment
+                    .transaction_id,
+
+                status:
+                  latestPayment
+                    .status,
+
+                date:
+                  latestPayment
+                    .created_at,
+              }
+            : null,
       },
+
+      eligibility,
 
       recent_activities:
         recentActivities,
@@ -1400,29 +2266,40 @@ export const saveAcademics = asyncHandler(
 /**
  * GET /student/learning
  */
+/**
+ * GET /student/learning
+ */
+/**
+ * GET /student/learning
+ */
 export const learning = asyncHandler(
   async (req, res) => {
-    const student = await Student.findByPk(
-      req.user.id,
-    );
-
-    if (!student) {
-      throw new AppError(
-        "Student not found",
-        404,
-      );
-    }
+    const student =
+      await getCurrentStudent(req);
 
     if (!student.domain_id) {
       return ok(res, {
         modules: [],
         summary: {
+          total_modules: 0,
           total_chapters: 0,
           completed_chapters: 0,
+          remaining_chapters: 0,
           progress_percentage: 0,
+
+          total_quizzes: 0,
+          quizzes_passed: 0,
+          quiz_progress_percentage: 0,
+          average_quiz_score: 0,
         },
       });
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fetch learning structure
+    |--------------------------------------------------------------------------
+    */
 
     const modules = await Module.findAll({
       where: {
@@ -1433,52 +2310,243 @@ export const learning = asyncHandler(
         {
           model: Chapter,
           required: false,
+
+          include: [
+            {
+              model: ChapterResource,
+              as: "resources",
+              required: false,
+
+              where: {
+                status: "active",
+              },
+            },
+
+            {
+              model: Quiz,
+              as: "quiz",
+              required: false,
+
+              where: {
+                status: "active",
+              },
+            },
+          ],
         },
       ],
 
       order: [
         ["module_number", "ASC"],
-        [Chapter, "chapter_number", "ASC"],
+
+        [
+          Chapter,
+          "chapter_number",
+          "ASC",
+        ],
+
+        [
+          Chapter,
+          {
+            model: ChapterResource,
+            as: "resources",
+          },
+          "sort_order",
+          "ASC",
+        ],
       ],
     });
 
-    const completions =
-      await ChapterCompletion.findAll({
-        where: {
-          student_id: student.id,
-        },
-      });
+    /*
+    |--------------------------------------------------------------------------
+    | Collect chapter + quiz IDs
+    |--------------------------------------------------------------------------
+    */
 
-    const completedChapterIds = new Set(
-      completions
-        .filter(
-          (completion) =>
-            completion.status === "completed",
+    const allChapters =
+      modules.flatMap(
+        (module) =>
+          module.Chapters || [],
+      );
+
+    const chapterIds =
+      allChapters.map(
+        (chapter) =>
+          Number(chapter.id),
+      );
+
+    const quizIds =
+      allChapters
+        .map((chapter) =>
+          chapter.quiz
+            ? Number(
+                chapter.quiz.id,
+              )
+            : null,
         )
-        .map((completion) =>
-          Number(completion.chapter_id),
-        ),
-    );
+        .filter(Boolean);
 
-    let previousChapterCompleted = true;
+    /*
+    |--------------------------------------------------------------------------
+    | Load chapter completions
+    |--------------------------------------------------------------------------
+    */
+
+    const completions =
+      chapterIds.length > 0
+        ? await ChapterCompletion.findAll({
+            where: {
+              student_id:
+                student.id,
+
+              chapter_id: {
+                [Op.in]:
+                  chapterIds,
+              },
+            },
+
+            attributes: [
+              "chapter_id",
+              "status",
+              "completed_at",
+            ],
+          })
+        : [];
+
+    const completedChapterIds =
+      new Set(
+        completions
+          .filter(
+            (completion) =>
+              completion.status ===
+              "completed",
+          )
+          .map((completion) =>
+            Number(
+              completion.chapter_id,
+            ),
+          ),
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Load all quiz attempts
+    |--------------------------------------------------------------------------
+    */
+
+    const quizAttempts =
+      quizIds.length > 0
+        ? await QuizAttempt.findAll({
+            where: {
+              student_id:
+                student.id,
+
+              quiz_id: {
+                [Op.in]:
+                  quizIds,
+              },
+            },
+
+            attributes: [
+              "id",
+              "quiz_id",
+              "attempt_number",
+              "obtained_marks",
+              "total_marks",
+              "percentage",
+              "passed",
+              "status",
+              "started_at",
+              "submitted_at",
+              "expires_at",
+              "time_taken_seconds",
+            ],
+
+            order: [
+              [
+                "attempt_number",
+                "DESC",
+              ],
+            ],
+          })
+        : [];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Group quiz attempts
+    |--------------------------------------------------------------------------
+    */
+
+    const attemptsByQuiz =
+      new Map();
+
+    for (
+      const attempt of
+      quizAttempts
+    ) {
+      const quizId =
+        Number(attempt.quiz_id);
+
+      if (
+        !attemptsByQuiz.has(
+          quizId,
+        )
+      ) {
+        attemptsByQuiz.set(
+          quizId,
+          [],
+        );
+      }
+
+      attemptsByQuiz
+        .get(quizId)
+        .push(attempt);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Format modules
+    |--------------------------------------------------------------------------
+    */
+
+    let previousChapterCompleted =
+      true;
+
     let totalChapters = 0;
     let completedChapters = 0;
 
-    const formattedModules = modules.map(
-      (module) => {
+    let totalQuizzes = 0;
+    let quizzesPassed = 0;
+
+    let quizScoreTotal = 0;
+    let scoredQuizCount = 0;
+
+    const formattedModules =
+      modules.map((module) => {
+        const moduleJson =
+          module.toJSON();
+
         const chapters = (
-          module.Chapters || []
+          moduleJson.Chapters ||
+          []
         ).map((chapter) => {
           totalChapters += 1;
 
+          const chapterId =
+            Number(chapter.id);
+
           const completed =
             completedChapterIds.has(
-              Number(chapter.id),
+              chapterId,
             );
 
           if (completed) {
-            completedChapters += 1;
+            completedChapters +=
+              1;
           }
+
+          /*
+           * Chapter unlock logic
+           */
 
           const unlocked =
             previousChapterCompleted ||
@@ -1487,35 +2555,410 @@ export const learning = asyncHandler(
           previousChapterCompleted =
             completed;
 
+          /*
+           * Resources
+           */
+
+          const resources = (
+            chapter.resources ||
+            []
+          )
+            .filter(
+              (resource) =>
+                resource.status ===
+                "active",
+            )
+            .sort(
+              (
+                first,
+                second,
+              ) =>
+                Number(
+                  first.sort_order ||
+                    0,
+                ) -
+                Number(
+                  second.sort_order ||
+                    0,
+                ),
+            );
+
+          /*
+           * Quiz
+           */
+
+          let formattedQuiz =
+            null;
+
+          if (
+            chapter.quiz &&
+            chapter.quiz.status ===
+              "active"
+          ) {
+            totalQuizzes += 1;
+
+            const quizId =
+              Number(
+                chapter.quiz.id,
+              );
+
+            const attempts =
+              attemptsByQuiz.get(
+                quizId,
+              ) || [];
+
+            const finalizedAttempts =
+              attempts.filter(
+                (attempt) =>
+                  [
+                    "submitted",
+                    "expired",
+                  ].includes(
+                    attempt.status,
+                  ),
+              );
+
+            const submittedAttempts =
+              attempts.filter(
+                (attempt) =>
+                  attempt.status ===
+                  "submitted",
+              );
+
+            const activeAttempt =
+              attempts.find(
+                (attempt) =>
+                  attempt.status ===
+                  "in_progress",
+              );
+
+            const passedAttempt =
+              submittedAttempts.find(
+                (attempt) =>
+                  Boolean(
+                    attempt.passed,
+                  ),
+              );
+
+            const bestAttempt =
+              submittedAttempts.length >
+              0
+                ? submittedAttempts.reduce(
+                    (
+                      best,
+                      current,
+                    ) =>
+                      Number(
+                        current.percentage,
+                      ) >
+                      Number(
+                        best.percentage,
+                      )
+                        ? current
+                        : best,
+                  )
+                : null;
+
+            const passed =
+              Boolean(
+                passedAttempt,
+              );
+
+            if (passed) {
+              quizzesPassed += 1;
+            }
+
+            if (bestAttempt) {
+              quizScoreTotal +=
+                Number(
+                  bestAttempt.percentage ||
+                    0,
+                );
+
+              scoredQuizCount +=
+                1;
+            }
+
+            const attemptsAllowed =
+              Number(
+                chapter.quiz
+                  .attempts_allowed ||
+                  1,
+              );
+
+            const attemptsUsed =
+              finalizedAttempts.length;
+
+            const attemptsRemaining =
+              Math.max(
+                attemptsAllowed -
+                  attemptsUsed,
+                0,
+              );
+
+            formattedQuiz = {
+              id:
+                chapter.quiz.id,
+
+              chapter_id:
+                chapter.quiz
+                  .chapter_id,
+
+              title:
+                chapter.quiz.title,
+
+              description:
+                chapter.quiz
+                  .description ||
+                null,
+
+              passing_score:
+                toNumber(
+                  chapter.quiz
+                    .passing_score,
+                ),
+
+              total_marks:
+                toNumber(
+                  chapter.quiz
+                    .total_marks,
+                ),
+
+              attempts_allowed:
+                attemptsAllowed,
+
+              attempts_used:
+                attemptsUsed,
+
+              attempts_remaining:
+                attemptsRemaining,
+
+              time_limit_minutes:
+                chapter.quiz
+                  .time_limit_minutes,
+
+              randomize_questions:
+                Boolean(
+                  chapter.quiz
+                    .randomize_questions,
+                ),
+
+              show_result_immediately:
+                Boolean(
+                  chapter.quiz
+                    .show_result_immediately,
+                ),
+
+              status:
+                chapter.quiz.status,
+
+              passed,
+
+              can_start:
+                Boolean(
+                  activeAttempt ||
+                    attemptsRemaining >
+                      0,
+                ),
+
+              active_attempt_id:
+                activeAttempt?.id ||
+                null,
+
+              best_score:
+                bestAttempt
+                  ? toNumber(
+                      bestAttempt.percentage,
+                    )
+                  : null,
+
+              best_attempt_id:
+                bestAttempt?.id ||
+                null,
+
+              latest_attempt:
+                attempts.length >
+                0
+                  ? {
+                      id:
+                        attempts[0]
+                          .id,
+
+                      attempt_number:
+                        attempts[0]
+                          .attempt_number,
+
+                      percentage:
+                        toNumber(
+                          attempts[0]
+                            .percentage,
+                        ),
+
+                      passed:
+                        Boolean(
+                          attempts[0]
+                            .passed,
+                        ),
+
+                      status:
+                        attempts[0]
+                          .status,
+                    }
+                  : null,
+            };
+          }
+
           return {
-            ...chapter.toJSON(),
+            id: chapter.id,
+
+            module_id:
+              chapter.module_id,
+
+            chapter_number:
+              chapter.chapter_number,
+
+            chapter_name:
+              chapter.chapter_name,
+
+            description:
+              chapter.description ||
+              null,
+
+            duration_minutes:
+              Number(
+                chapter.duration_minutes ||
+                  0,
+              ),
+
+            is_preview:
+              Boolean(
+                chapter.is_preview,
+              ),
+
+            status:
+              chapter.status,
+
             unlocked,
             completed,
+
+            resources,
+
+            resource_count:
+              resources.length,
+
+            quiz:
+              formattedQuiz,
+
+            has_quiz:
+              Boolean(
+                formattedQuiz,
+              ),
           };
         });
 
-        return {
-          ...module.toJSON(),
-          Chapters: chapters,
-        };
-      },
-    );
+        const moduleCompletedCount =
+          chapters.filter(
+            (chapter) =>
+              chapter.completed,
+          ).length;
 
-    const progressPercentage =
+        return {
+          id: moduleJson.id,
+
+          domain_id:
+            moduleJson.domain_id,
+
+          module_number:
+            moduleJson.module_number,
+
+          module_name:
+            moduleJson.module_name,
+
+          Chapters: chapters,
+
+          progress:
+            calculatePercentage(
+              moduleCompletedCount,
+              chapters.length,
+            ),
+
+          completed:
+            chapters.length > 0 &&
+            moduleCompletedCount ===
+              chapters.length,
+        };
+      });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Summary
+    |--------------------------------------------------------------------------
+    */
+
+    const learningProgress =
       calculatePercentage(
         completedChapters,
         totalChapters,
       );
 
+    const quizProgress =
+      calculatePercentage(
+        quizzesPassed,
+        totalQuizzes,
+      );
+
+    const averageQuizScore =
+      scoredQuizCount > 0
+        ? Number(
+            (
+              quizScoreTotal /
+              scoredQuizCount
+            ).toFixed(2),
+          )
+        : 0;
+
     return ok(res, {
-      modules: formattedModules,
+      modules:
+        formattedModules,
 
       summary: {
-        total_chapters: totalChapters,
+        total_modules:
+          formattedModules.length,
+
+        total_chapters:
+          totalChapters,
+
         completed_chapters:
           completedChapters,
+
+        remaining_chapters:
+          Math.max(
+            totalChapters -
+              completedChapters,
+            0,
+          ),
+
         progress_percentage:
-          progressPercentage,
+          learningProgress,
+
+        total_quizzes:
+          totalQuizzes,
+
+        quizzes_passed:
+          quizzesPassed,
+
+        quizzes_remaining:
+          Math.max(
+            totalQuizzes -
+              quizzesPassed,
+            0,
+          ),
+
+        quiz_progress_percentage:
+          quizProgress,
+
+        average_quiz_score:
+          averageQuizScore,
       },
     });
   },
@@ -2452,8 +3895,7 @@ export const getAttendanceCalendar =
     });
   });
 
-  const FULL_DAY_HOURS = 8;
-const HALF_DAY_HOURS = 4;
+  
 
 const getIndiaDateParts = () => {
   const formatter =
@@ -2508,23 +3950,7 @@ const timeToSeconds = (time) => {
   );
 };
 
-const calculateAttendanceStatus = (
-  learningHours,
-) => {
-  if (
-    learningHours >= FULL_DAY_HOURS
-  ) {
-    return "present";
-  }
 
-  if (
-    learningHours >= HALF_DAY_HOURS
-  ) {
-    return "half_day";
-  }
-
-  return "absent";
-};
 
 /**
  * GET /student/attendance/today
@@ -2735,23 +4161,14 @@ export const checkOutAttendance =
       ).toFixed(2),
     );
 
-    const status =
-      calculateAttendanceStatus(
-        learningHours,
-      );
+    
 
-    await attendance.update({
-      logout_time: time,
-      learning_hours: learningHours,
-      status,
-
-      remarks:
-        status === "present"
-          ? "Full-day attendance completed"
-          : status === "half_day"
-            ? "Half-day attendance completed"
-            : "Minimum attendance hours not completed",
-    });
+   await attendance.update({
+  logout_time: time,
+  learning_hours: learningHours,
+  status: "present",
+  remarks: "Attendance completed",
+});
 
     return ok(
       res,
@@ -3391,24 +4808,78 @@ export const getPayments = asyncHandler(
         0,
       );
 
-    return ok(res, {
-      payments,
+   return ok(res, {
+  payments:
+    payments.map(
+      (payment) => ({
+        id: payment.id,
 
-      summary: {
-        total_transactions:
-          payments.length,
+        amount:
+          toNumber(
+            payment.amount,
+          ),
 
-        successful_transactions:
-          successfulPayments.length,
+        currency:
+          payment.currency ||
+          "INR",
 
-        total_paid: Number(
-          totalPaid.toFixed(2),
-        ),
+        transaction_id:
+          payment.transaction_id,
 
-        payment_status:
-          student.payment_status,
-      },
-    });
+        cashfree_order_id:
+          payment.cashfree_order_id,
+
+        cf_payment_id:
+          payment.cf_payment_id,
+
+        gateway:
+          payment.gateway,
+
+        status:
+          payment.status,
+
+        paid_at:
+          payment.paid_at,
+
+        created_at:
+          payment.created_at,
+
+        receipt_number:
+          payment.receipt_number ||
+          null,
+
+        receipt_generated_at:
+          payment.receipt_generated_at ||
+          null,
+
+        receipt_available:
+          Boolean(
+            payment.receipt_path,
+          ),
+
+        receipt_download_url:
+          payment.receipt_path
+            ? `/student/payments/${payment.id}/receipt`
+            : null,
+      }),
+    ),
+
+  summary: {
+    total_transactions:
+      payments.length,
+
+    successful_transactions:
+      successfulPayments.length,
+
+    total_paid:
+      Number(
+        totalPaid.toFixed(2),
+      ),
+
+    payment_status:
+      student.payment_status,
+  },
+});
   },
 );
 /**
@@ -3503,6 +4974,10 @@ export const getCertificate =
         created_at:
           certificate.created_at,
       },
+      download_url:
+  certificate.certificate_url
+    ? `/student/documents/certificate/download`
+    : null,
     });
   });
   /**
@@ -3866,4 +5341,114 @@ export const getAnalytics =
       monthly_progress:
         monthlyProgress,
     });
+  });
+
+  export const downloadPaymentReceipt =
+  asyncHandler(async (req, res) => {
+    const student =
+      await getCurrentStudent(req);
+
+    const paymentId =
+      Number(
+        req.params.paymentId,
+      );
+
+    if (
+      !Number.isInteger(paymentId) ||
+      paymentId <= 0
+    ) {
+      throw new AppError(
+        "Invalid payment id",
+        422,
+      );
+    }
+
+    const payment =
+      await Payment.findOne({
+        where: {
+          id: paymentId,
+          student_id: student.id,
+        },
+      });
+
+    if (!payment) {
+      throw new AppError(
+        "Payment not found",
+        404,
+      );
+    }
+
+    if (
+      ![
+        "success",
+        "paid",
+      ].includes(
+        payment.status,
+      )
+    ) {
+      throw new AppError(
+        "Receipt is available only after successful payment",
+        409,
+      );
+    }
+
+    if (!payment.receipt_path) {
+      throw new AppError(
+        "Payment receipt has not been generated yet",
+        404,
+      );
+    }
+
+    const absolutePath =
+      path.resolve(
+        process.cwd(),
+        String(
+          payment.receipt_path,
+        ),
+      );
+
+    const receiptRoot =
+      path.resolve(
+        process.cwd(),
+        "storage",
+        "payment-receipts",
+      );
+
+    const validPath =
+      absolutePath ===
+        receiptRoot ||
+      absolutePath.startsWith(
+        `${receiptRoot}${path.sep}`,
+      );
+
+    if (!validPath) {
+      throw new AppError(
+        "Invalid receipt file path",
+        400,
+      );
+    }
+
+    if (
+      !fs.existsSync(
+        absolutePath,
+      )
+    ) {
+      throw new AppError(
+        "Payment receipt file does not exist",
+        404,
+      );
+    }
+
+    const fileName =
+      `payment-receipt-${student.registration_number}.pdf`;
+
+    res.setHeader(
+      "Cache-Control",
+      "private, no-store",
+    );
+
+    return res.download(
+      absolutePath,
+      fileName,
+    );
   });

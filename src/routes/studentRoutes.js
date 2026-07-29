@@ -7,6 +7,13 @@ import {
 import { upload } from "../utils/files.js";
 
 import * as c from "../controllers/studentController.js";
+import {
+  getQuizDetails,
+  startQuiz,
+  submitQuiz,
+  getQuizAttemptResult,
+  listMyQuizAttempts,
+} from "../controllers/studentQuizController.js";
 
 const r = Router();
 
@@ -238,6 +245,37 @@ r.post(
 
 /*
 |--------------------------------------------------------------------------
+| Student Quiz Routes
+|--------------------------------------------------------------------------
+*/
+
+r.get(
+  "/quizzes/:quizId",
+  getQuizDetails,
+);
+
+r.post(
+  "/quizzes/:quizId/start",
+  startQuiz,
+);
+
+r.get(
+  "/quizzes/:quizId/attempts",
+  listMyQuizAttempts,
+);
+
+r.post(
+  "/quiz-attempts/:attemptId/submit",
+  submitQuiz,
+);
+
+r.get(
+  "/quiz-attempts/:attemptId/result",
+  getQuizAttemptResult,
+);
+
+/*
+|--------------------------------------------------------------------------
 | Live Projects
 |--------------------------------------------------------------------------
 */
@@ -300,6 +338,11 @@ r.get(
 r.get(
   "/payments/:paymentId",
   c.getPaymentDetails,
+);
+
+r.get(
+  "/payments/:paymentId/receipt",
+  c.downloadPaymentReceipt,
 );
 
 /*
