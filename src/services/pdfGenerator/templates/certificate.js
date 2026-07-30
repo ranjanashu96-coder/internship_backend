@@ -53,7 +53,7 @@ export const certificateTemplate = ({
   <body>
     <div class="certificate">
       <div class="top">
-        ${logoDataUri ? `<img class="logo" src="${logoDataUri}" alt="Eduintern" />` : `<div class="blue text-bold" style="font-size:25px">Eduintern</div>`}
+        ${logoDataUri ? `<img class="logo" src="${logoDataUri}" alt="Rnexora" />` : `<div class="blue text-bold" style="font-size:25px">Rnexora</div>`}
         <div class="company"><strong>${escapeHtml(company.name)}</strong><br />CIN: ${escapeHtml(company.cin || "-")}<br />${escapeHtml(company.website || "-")}</div>
       </div>
       <h1>Certificate of Completion</h1>

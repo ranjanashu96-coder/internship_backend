@@ -19,7 +19,7 @@ export const offerLetterTemplate = ({
   ).getFullYear();
   const letterReference =
     internship.letter_reference ||
-    `EDU/${issueYear}/INT/${String(student.id || registrationNumber).padStart(6, "0")}`;
+    `RKN/${issueYear}/INT/${String(student.id || registrationNumber).padStart(6, "0")}`;
 
   return `<!doctype html>
   <html>
@@ -76,8 +76,8 @@ export const offerLetterTemplate = ({
         <div>
           ${
             logoDataUri
-              ? `<img class="logo" src="${logoDataUri}" alt="Eduintern" />`
-              : `<div class="text-bold blue" style="font-size: 26px;">Eduintern</div>`
+              ? `<img class="logo" src="${logoDataUri}" alt="RKnexora" />`
+              : `<div class="text-bold blue" style="font-size: 26px;">Rknexora</div>`
           }
         </div>
         <div class="company">
@@ -89,7 +89,7 @@ export const offerLetterTemplate = ({
         </div>
       </div>
 
-      <h1>INTERNSHIP ACCEPTANCE/OFFER LETTER</h1>
+      <h1>INTERNSHIP ACCEPTANCE LETTER</h1>
 
       <div class="reference-row">
         <div><strong>Letter Ref. No.:</strong> ${escapeHtml(letterReference)}</div>
@@ -106,7 +106,7 @@ export const offerLetterTemplate = ({
       <p>Dear Candidate,</p>
       <p>
         We are pleased to accept your application and offer you an internship with
-        <strong>${escapeHtml(company.brand_name || "Eduintern")}</strong>, an initiative of
+        <strong>${escapeHtml(company.brand_name || "Rknexora")}</strong>, an initiative of
         <strong>${escapeHtml(company.name)}</strong>. Our organization satisfies the applicable internship
         guidelines of <strong>${escapeHtml(college.university || "the affiliated university")}</strong>
         for undergraduate programmes.
@@ -117,7 +117,7 @@ export const offerLetterTemplate = ({
         <tr><td>Name of the Student</td><td>:</td><td>${escapeHtml(student.name)}</td></tr>
         <tr><td>Internship Registration No.</td><td>:</td><td>${escapeHtml(registrationNumber)}</td></tr>
         <tr><td>College / Institution</td><td>:</td><td>${escapeHtml(college.name)}</td></tr>
-        <tr><td>University Roll No.</td><td>:</td><td>${escapeHtml(student.student_id || student.registration_number || "-")}</td></tr>
+   
         <tr><td>Department & Semester</td><td>:</td><td>${escapeHtml(`${student.programme || "-"} - ${student.semester || "-"}`)}</td></tr>
         <tr><td>Internship Domain</td><td>:</td><td>${escapeHtml(domain.domain_name || "-")}</td></tr>
         <tr><td>Internship Duration</td><td>:</td><td>${escapeHtml(`${internship.duration_hours || domain.duration_hours || 120} Hours`)}</td></tr>

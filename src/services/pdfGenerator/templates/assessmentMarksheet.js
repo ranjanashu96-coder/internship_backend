@@ -47,7 +47,7 @@ export const assessmentMarksheetTemplate = ({
     </head>
     <body>
       <div class="header">
-        <div class="brand">${escapeHtml(company.brand_name || "Eduintern Internship Program")}</div>
+        <div class="brand">${escapeHtml(company.brand_name || "Rnexora Internship Program")}</div>
         <div class="unit">A unit of ${escapeHtml(company.name)}</div>
         <h1>ASSESSMENT MARKSHEET</h1>
         <div class="session">Academic Session ${escapeHtml(student.session || "-")}</div>

@@ -71,7 +71,7 @@ export const internshipReportTemplate = ({
   const references = reportContent.references || [
     "University Grants Commission internship guidelines.",
     "National Education Policy implementation resources.",
-    `${company.brand_name || "Eduintern"} internship programme handbook.`,
+    `${company.brand_name || "Rnexora"} internship programme handbook.`,
     `Selected learning resources and case studies related to ${topic}.`,
   ];
 
@@ -106,7 +106,7 @@ export const internshipReportTemplate = ({
     "ACKNOWLEDGMENT",
     paragraph(
       reportContent.acknowledgment ||
-        `I express my sincere gratitude to ${company.brand_name || "Eduintern"}, ${company.name}, ${college.name}, my faculty mentors and the internship supervisor for their guidance and support. The structured activities, learning resources and regular feedback helped me complete this internship in ${topic} successfully. I also thank my family and peers for their encouragement throughout the programme.`,
+        `I express my sincere gratitude to ${company.brand_name || "Rnexora"}, ${company.name}, ${college.name}, my faculty mentors and the internship supervisor for their guidance and support. The structured activities, learning resources and regular feedback helped me complete this internship in ${topic} successfully. I also thank my family and peers for their encouragement throughout the programme.`,
     ) +
       `<div class="student-note"><strong>${escapeHtml(student.name)}</strong><br />University Roll No. - ${escapeHtml(student.student_id || student.registration_number || "-")}</div>`,
   );
@@ -169,7 +169,7 @@ export const internshipReportTemplate = ({
       "3. ABOUT THE ORGANIZATION",
       paragraph(
         reportContent.organization ||
-          `${company.brand_name || "Eduintern"}, a unit of ${company.name}, provides structured internship and skill-development programmes. The organization focuses on academic-industry alignment, practical exposure, assessment, documentation and employability-oriented learning.`,
+          `${company.brand_name || "Rnexora"}, a unit of ${company.name}, provides structured internship and skill-development programmes. The organization focuses on academic-industry alignment, practical exposure, assessment, documentation and employability-oriented learning.`,
       ) +
         `<h3>3.1 Vision</h3>` +
         paragraph(

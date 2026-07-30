@@ -19,14 +19,14 @@ import { certificateTemplate } from "./templates/certificate.js";
 import { internshipReportTemplate } from "./templates/internshipReport.js";
 
 const defaultCompany = {
-  brand_name: "Eduintern Internship Program",
-  name: "OPTIMARK VENTURES PRIVATE LIMITED",
-  cin: "U62020BR2023PTC064893",
-  address: "East Lohanipur Khadpar, Kadamkuan, Patna - 800003",
-  email: "support@eduintern.in",
-  phone: "7544090878",
-  website: "www.eduintern.in",
-  signatory_name: "Rahul Kumar",
+  brand_name: "RK NEXORA",
+  name: "RKNEXORA PRIVATE LIMITED",
+  cin: "U85499BR2026PTC086757",
+  address: "C/O MUKESH KUMAR, KHIRI, PS ATRI, JETHIYAN, Jethian, Atri, Gaya - 805236, Bihar, India",
+  email: "rknexorapvtltd@gmail.com",
+  phone: "8544233076",
+  website: "www.rknexora.org",
+  signatory_name: "Kumud Bihari",
   signatory_designation: "Managing Director",
 };
 
@@ -35,13 +35,13 @@ const resolveAssets = (assets = {}) => {
 
   return {
     logoDataUri: fileToDataUri(
-      assets.logo || path.join(assetRoot, "rknexora-logo.png"),
+      assets.logo || path.join(assetRoot, "rknexora_logo_transparent.png"),
     ),
     signatureDataUri: fileToDataUri(
-      assets.signature || path.join(assetRoot, "director-signature.png"),
+      assets.signature || path.join(assetRoot, "kumud_bihari_signature_TRUE_transparent.png"),
     ),
     stampDataUri: fileToDataUri(
-      assets.stamp || path.join(assetRoot, "company-stamp.png"),
+      assets.stamp || path.join(assetRoot, "rknexora_stamp_transparent.png"),
     ),
     collegeLogoDataUri: fileToDataUri(assets.collegeLogo),
   };
