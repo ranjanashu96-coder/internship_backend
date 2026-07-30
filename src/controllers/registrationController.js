@@ -103,17 +103,13 @@ const getStudentDocuments = (student) => {
       savedDocuments.identity_document ||
       null,
 
-    marksheet:
-      savedDocuments.marksheet ||
-      null,
   };
 };
 
 const areDocumentsComplete = (documents) =>
   Boolean(
     documents.photo &&
-      documents.identity_document &&
-      documents.marksheet,
+      documents.identity_document 
   );
 
 const getStudentResponseData = (
@@ -595,16 +591,11 @@ export const uploadRegistrationDocuments =
         files.identity_document?.[0]
           ? `/uploads/registration/${files.identity_document[0].filename}`
           : existingDocuments.identity_document,
-
-      marksheet:
-        files.marksheet?.[0]
-          ? `/uploads/registration/${files.marksheet[0].filename}`
-          : existingDocuments.marksheet,
     };
 
     if (!areDocumentsComplete(documents)) {
       throw new AppError(
-        "Photo, identity document and marksheet are required",
+        "Photo, identity document  are required",
         422,
       );
     }
@@ -1642,10 +1633,12 @@ const formatReceiptDate = (value) => {
 };
 
 const formatAmount = (value) => {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-  }).format(Number(value || 0));
+  const amount = Number(value || 0);
+
+  return `Rs. ${new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)}`;
 };
 
 const addReceiptRow = (

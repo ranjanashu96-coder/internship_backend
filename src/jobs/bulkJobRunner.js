@@ -332,11 +332,13 @@ async preview(
     students.length;
 
   if (
-    type ===
-      "attendance" &&
-    payload.start_date &&
-    payload.end_date
-  ) {
+  [
+    "attendance",
+    "full_internship_process",
+  ].includes(type) &&
+  payload.start_date &&
+  payload.end_date
+) {
     const dates =
       this.dateRange(
         payload.start_date,
@@ -830,11 +832,17 @@ getJobStepLabel(
         job.result,
 
       success_count:
-        Number(
+  job.type ===
+  "full_internship_process"
+    ? Number(
+        job.success_count ||
+          0,
+      )
+    : Number(
+        job.processed ||
           job.total ||
-            job.processed ||
-            0,
-        ),
+          0,
+      ),
 
       error_message:
         null,
@@ -1217,16 +1225,20 @@ buildStudentQuery(payload = {}) {
     let processed = 0;
 
     for (
-      let index = 0;
-      index < rows.length;
-      index += batchSize
-    ) {
-      const batch =
-        rows.slice(
-          index,
-          index +
-            batchSize,
-        );
+  let index = 0;
+  index < rows.length;
+  index += batchSize
+) {
+  await this.assertNotCancelled(
+    job,
+  );
+
+  const batch =
+    rows.slice(
+      index,
+      index +
+        batchSize,
+    );
 
       await Attendance.bulkCreate(
         batch,
@@ -1358,40 +1370,40 @@ buildStudentQuery(payload = {}) {
         payload,
       );
 
-      const stepLabels = {
-  acceptance_letters:
-    "Generating Offer Letters",
+//       const stepLabels = {
+//   acceptance_letters:
+//     "Generating Offer Letters",
 
-  attendance:
-    "Generating Attendance",
+//   attendance:
+//     "Generating Attendance",
 
-  complete_learning:
-    "Completing Learning",
+//   complete_learning:
+//     "Completing Learning",
 
-  assessment:
-    "Generating Assessments",
+//   assessment:
+//     "Generating Assessments",
 
-  publish_results:
-    "Publishing Results",
+//   publish_results:
+//     "Publishing Results",
 
-  complete_internship:
-    "Completing Internship",
+//   complete_internship:
+//     "Completing Internship",
 
-  attendance_sheets:
-    "Generating Attendance Sheets",
+//   attendance_sheets:
+//     "Generating Attendance Sheets",
 
-  log_books:
-    "Generating Logbooks",
+//   log_books:
+//     "Generating Logbooks",
 
-  internship_reports:
-    "Generating Internship Reports",
+//   internship_reports:
+//     "Generating Internship Reports",
 
-  certificates:
-    "Generating Certificates",
+//   certificates:
+//     "Generating Certificates",
 
-  zip_documents:
-    "Creating ZIP Package",
-};
+//   zip_documents:
+//     "Creating ZIP Package",
+// };
 
     const completedAt =
       this.resolveDateTime(
@@ -1407,6 +1419,9 @@ buildStudentQuery(payload = {}) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
       if (
         !student.domain_id
       ) {
@@ -1438,6 +1453,9 @@ buildStudentQuery(payload = {}) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
       const chapters =
         chapterMap.get(
           student.id,
@@ -1564,6 +1582,10 @@ buildStudentQuery(payload = {}) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const academics = {
         ...(
           student.academics_json ||
@@ -1790,6 +1812,10 @@ buildStudentQuery(payload = {}) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const mentorId =
         Number(
           payload.mentor_id ||
@@ -2050,6 +2076,10 @@ buildStudentQuery(payload = {}) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const assessment =
         await Assessment.findOne(
           {
@@ -2338,6 +2368,9 @@ async generateAcceptanceLetters(
   let processed = 0;
 
   for (const student of students) {
+    await this.assertNotCancelled(
+  job,
+);
     const documentResult =
       await bulkPdfDocumentService
         .generateOfferLetter({
@@ -2474,6 +2507,9 @@ async generateAttendanceSheets(
   let processed = 0;
 
   for (const student of students) {
+    await this.assertNotCancelled(
+  job,
+);
     const attendance =
       await this.getAttendance(
         student.id,
@@ -2610,6 +2646,10 @@ async generateAttendanceSheets(
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const attendance =
         await this.getAttendance(
           student.id,
@@ -2785,6 +2825,10 @@ const fileUrl =
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const attendance =
         await this.getAttendance(
           student.id,
@@ -2984,6 +3028,9 @@ async generateCertificates(
   let processed = 0;
 
   for (const student of students) {
+    await this.assertNotCancelled(
+  job,
+);
     const eligibility =
   await getStudentEligibility(
     student.id,
@@ -3272,6 +3319,10 @@ if (!eligibility.eligible) {
     for (
       const student of students
     ) {
+      await this.assertNotCancelled(
+    job,
+  );
+
       const folder =
         this.studentFolder(
           student,
@@ -3600,15 +3651,12 @@ if (!eligibility.eligible) {
   await this.assertNotCancelled(
     job,
   );
-
-  await this.setCurrentStep(
-    job,
-    stepLabels[
-      step.name
-    ] ||
-      step.name,
-  );
-
+await this.setCurrentStep(
+  job,
+  this.getJobStepLabel(
+    step.name,
+  ),
+);
   try {
     const result =
       await step.run();

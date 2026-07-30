@@ -1800,6 +1800,274 @@ export const bulkStatus = asyncHandler(
   },
 );
 
+/*
+|--------------------------------------------------------------------------
+| Bulk Automation Preview
+|--------------------------------------------------------------------------
+*/
+
+export const previewBulk =
+  asyncHandler(
+    async (req, res) => {
+      const {
+        type,
+        payload = {},
+      } = req.body;
+
+      if (
+        !BULK_JOB_TYPES.includes(
+          type,
+        )
+      ) {
+        throw new AppError(
+          "Invalid bulk operation type",
+          422,
+        );
+      }
+
+      try {
+        const preview =
+          await bulkJobRunner.preview(
+            type,
+            payload,
+          );
+
+        return ok(
+          res,
+          preview,
+          "Bulk operation preview generated successfully",
+        );
+      } catch (error) {
+        throw new AppError(
+          error?.message ||
+            "Unable to generate bulk preview",
+          422,
+        );
+      }
+    },
+  );
+
+
+/*
+|--------------------------------------------------------------------------
+| Bulk Job History
+|--------------------------------------------------------------------------
+*/
+
+export const listBulkJobs =
+  asyncHandler(
+    async (req, res) => {
+      const page =
+        Math.max(
+          1,
+          Number(
+            req.query.page ||
+              1,
+          ),
+        );
+
+      const limit =
+        Math.min(
+          50,
+          Math.max(
+            1,
+            Number(
+              req.query.limit ||
+                20,
+            ),
+          ),
+        );
+
+      const where = {};
+
+      const allowedStatuses = [
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+      ];
+
+      if (
+        req.query.status
+      ) {
+        if (
+          !allowedStatuses.includes(
+            req.query.status,
+          )
+        ) {
+          throw new AppError(
+            "Invalid bulk job status",
+            422,
+          );
+        }
+
+        where.status =
+          req.query.status;
+      }
+
+      if (
+        req.query.type
+      ) {
+        if (
+          !BULK_JOB_TYPES.includes(
+            req.query.type,
+          )
+        ) {
+          throw new AppError(
+            "Invalid bulk operation type",
+            422,
+          );
+        }
+
+        where.type =
+          req.query.type;
+      }
+
+      const result =
+        await BulkJob.findAndCountAll({
+          where,
+
+          limit,
+
+          offset:
+            (page - 1) *
+            limit,
+
+          order: [
+            [
+              "id",
+              "DESC",
+            ],
+          ],
+        });
+
+      return ok(
+        res,
+        {
+          items:
+            result.rows,
+
+          total:
+            result.count,
+
+          page,
+
+          limit,
+
+          totalPages:
+            Math.ceil(
+              result.count /
+                limit,
+            ),
+        },
+        "Bulk jobs fetched successfully",
+      );
+    },
+  );
+
+
+/*
+|--------------------------------------------------------------------------
+| Cancel Bulk Job
+|--------------------------------------------------------------------------
+*/
+
+export const cancelBulkJob =
+  asyncHandler(
+    async (req, res) => {
+      try {
+        const job =
+          await bulkJobRunner.cancel(
+            req.params.jobUuid,
+          );
+
+        return ok(
+          res,
+          job,
+          job.status ===
+          "cancelled"
+            ? "Bulk job cancelled successfully"
+            : "Bulk job cancellation requested",
+        );
+      } catch (error) {
+        throw new AppError(
+          error?.message ||
+            "Unable to cancel bulk job",
+          422,
+        );
+      }
+    },
+  );
+
+
+/*
+|--------------------------------------------------------------------------
+| Retry Bulk Job
+|--------------------------------------------------------------------------
+*/
+
+export const retryBulkJob =
+  asyncHandler(
+    async (req, res) => {
+      const previousJob =
+        await BulkJob.findOne({
+          where: {
+            job_uuid:
+              req.params
+                .jobUuid,
+          },
+        });
+
+      if (!previousJob) {
+        throw new AppError(
+          "Bulk job not found",
+          404,
+        );
+      }
+
+      if (
+        ![
+          "failed",
+          "cancelled",
+        ].includes(
+          previousJob.status,
+        )
+      ) {
+        throw new AppError(
+          "Only failed or cancelled jobs can be retried",
+          409,
+        );
+      }
+
+      const newJob =
+        await bulkJobRunner.create(
+          previousJob.type,
+
+          previousJob.payload ||
+            {},
+
+          req.user.id,
+        );
+
+      return ok(
+        res,
+        {
+          job_uuid:
+            newJob.job_uuid,
+
+          type:
+            newJob.type,
+
+          status:
+            newJob.status,
+        },
+        "Bulk job queued again",
+        202,
+      );
+    },
+  );
+
 export const createMentor = asyncHandler(async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -1944,8 +2212,6 @@ const assignedStudentCount =
   });
 
 await transaction.commit();
-
-    await transaction.commit();
 
     ok(
       res,

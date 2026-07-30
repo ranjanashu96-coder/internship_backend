@@ -60,7 +60,7 @@ router.post(
   ).fields([
     { name: "photo", maxCount: 1 },
     { name: "identity_document", maxCount: 1 },
-    { name: "marksheet", maxCount: 1 },
+   
   ]),
   [
     body("registration_number")

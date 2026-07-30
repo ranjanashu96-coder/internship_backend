@@ -65,13 +65,14 @@ import {
 } from "../utils/chapterResourceUpload.js";
 
 import {
-  list,
+ list,
   getById,
   create,
   update,
   remove,
 
   getAdminDashboard,
+
   createCollege,
   updateCollege,
   approveCollege,
@@ -84,6 +85,10 @@ import {
 
   processBulk,
   bulkStatus,
+  previewBulk,
+  listBulkJobs,
+  cancelBulkJob,
+  retryBulkJob,
 } from "../controllers/adminController.js";
 
 
@@ -399,14 +404,66 @@ router.delete(
 |--------------------------------------------------------------------------
 */
 
+/*
+|--------------------------------------------------------------------------
+| Bulk Automation
+|--------------------------------------------------------------------------
+*/
+
+/*
+ * Run se pehle affected students
+ * aur estimated records dekho.
+ */
+router.post(
+  "/bulk/preview",
+  previewBulk,
+);
+
+/*
+ * Naya bulk job queue karega.
+ */
 router.post(
   "/bulk/process",
   processBulk,
 );
 
+/*
+ * Purane / current jobs ki history.
+ *
+ * Filters:
+ * ?page=1
+ * ?limit=20
+ * ?status=running
+ * ?type=certificates
+ */
+router.get(
+  "/bulk/jobs",
+  listBulkJobs,
+);
+
+/*
+ * Single job ka live status.
+ */
 router.get(
   "/bulk/status/:jobUuid",
   bulkStatus,
+);
+
+/*
+ * Queued ya running job cancel.
+ */
+router.post(
+  "/bulk/:jobUuid/cancel",
+  cancelBulkJob,
+);
+
+/*
+ * Failed ya cancelled job
+ * same payload ke saath dobara run.
+ */
+router.post(
+  "/bulk/:jobUuid/retry",
+  retryBulkJob,
 );
 
 export default router;
