@@ -2563,3 +2563,148 @@ export const importStudents = asyncHandler(
     }
   },
 );
+
+/*
+|--------------------------------------------------------------------------
+| Start Student Internship
+|--------------------------------------------------------------------------
+*/
+
+export const startStudentInternship =
+  asyncHandler(
+    async (req, res) => {
+      const studentId =
+        Number(
+          req.params.id,
+        );
+
+      const startDate =
+        String(
+          req.body.start_date ||
+            "",
+        ).trim();
+
+      if (!studentId) {
+        throw new AppError(
+          "Student ID is required",
+          422,
+        );
+      }
+
+      if (!startDate) {
+        throw new AppError(
+          "Internship start date is required",
+          422,
+        );
+      }
+
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(
+          startDate,
+        )
+      ) {
+        throw new AppError(
+          "Invalid start date",
+          422,
+        );
+      }
+
+      const student =
+        await Student.findByPk(
+          studentId,
+        );
+
+      if (!student) {
+        throw new AppError(
+          "Student not found",
+          404,
+        );
+      }
+
+      if (
+        student.payment_status !==
+        "paid"
+      ) {
+        throw new AppError(
+          "Student has not completed payment",
+          409,
+        );
+      }
+
+      if (
+        student.internship_status ===
+        "blocked"
+      ) {
+        throw new AppError(
+          "Blocked student cannot start internship",
+          409,
+        );
+      }
+
+      if (
+        student.internship_status ===
+        "completed"
+      ) {
+        throw new AppError(
+          "Internship is already completed",
+          409,
+        );
+      }
+
+      const today =
+        new Intl.DateTimeFormat(
+          "en-CA",
+          {
+            timeZone:
+              "Asia/Kolkata",
+
+            year:
+              "numeric",
+
+            month:
+              "2-digit",
+
+            day:
+              "2-digit",
+          },
+        ).format(
+          new Date(),
+        );
+
+      await student.update({
+        internship_start_date:
+          startDate,
+
+        internship_status:
+          startDate <= today
+            ? "active"
+            : "registered",
+      });
+
+      return ok(
+        res,
+        {
+          student_id:
+            student.id,
+
+          name:
+            student.name,
+
+          portal_registration_number:
+            student.portal_registration_number,
+
+          payment_status:
+            student.payment_status,
+
+          internship_status:
+            student.internship_status,
+
+          internship_start_date:
+            student.internship_start_date,
+        },
+        startDate <= today
+          ? "Internship started successfully"
+          : "Internship scheduled successfully",
+      );
+    },
+  );

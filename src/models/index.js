@@ -144,6 +144,12 @@ export const Student = define(
       unique: true,
       allowNull: false,
     },
+    portal_registration_number: {
+  type: DataTypes.STRING(50),
+  unique: true,
+  allowNull: true,
+},
+
     student_id: {
       type: DataTypes.STRING(50),
       unique: true,
@@ -187,6 +193,27 @@ export const Student = define(
       ),
       defaultValue: "pending",
     },
+    learning_access_enabled: {
+  type: DataTypes.BOOLEAN,
+  allowNull: false,
+  defaultValue: false,
+},
+
+attendance_access_enabled: {
+  type: DataTypes.BOOLEAN,
+  allowNull: false,
+  defaultValue: false,
+},
+
+learning_start_date: {
+  type: DataTypes.DATEONLY,
+  allowNull: true,
+},
+
+attendance_start_date: {
+  type: DataTypes.DATEONLY,
+  allowNull: true,
+},
     username: {
       type: DataTypes.STRING(100),
       unique: true,
@@ -241,6 +268,7 @@ export const Student = define(
       {
         fields: ["registration_number"],
       },
+
       {
         fields: ["student_id"],
       },

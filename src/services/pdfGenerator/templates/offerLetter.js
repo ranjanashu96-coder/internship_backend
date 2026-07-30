@@ -13,7 +13,7 @@ export const offerLetterTemplate = ({
   internship,
 }) => {
   const registrationNumber =
-    internship.registration_number || student.registration_number || "-";
+     student.id || "-";
   const issueYear = new Date(
     internship.issue_date || Date.now(),
   ).getFullYear();

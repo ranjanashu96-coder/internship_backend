@@ -52,6 +52,39 @@ const createCashfreeOrderId = (
   return `RKN_${studentId}_${Date.now()}_${randomValue}`;
 };
 
+const createPortalRegistrationNumber = (
+  student,
+) => {
+  let year =
+    new Date().getFullYear();
+
+  if (student.registration_date) {
+    const registrationDate =
+      new Date(
+        `${student.registration_date}T00:00:00`,
+      );
+
+    if (
+      !Number.isNaN(
+        registrationDate.getTime(),
+      )
+    ) {
+      year =
+        registrationDate.getFullYear();
+    }
+  }
+
+  const serial =
+    String(
+      student.id,
+    ).padStart(
+      6,
+      "0",
+    );
+
+  return `RKN-${year}-${serial}`;
+};
+
 const parseJsonObject = (value) => {
   if (!value) {
     return {};
@@ -121,6 +154,12 @@ const getStudentResponseData = (
 
   registration_number:
     student.registration_number,
+
+  portal_registration_number:
+  student.portal_registration_number ||
+  createPortalRegistrationNumber(
+    student,
+  ),
 
   name:
     student.name,
@@ -517,18 +556,32 @@ await student.update(
 );
 
     return ok(
-      res,
-      {
-        student_id: student.id,
-        registration_number:
-          student.registration_number,
-        internship_status:
-          student.internship_status,
-        registration_locked: false,
-        next_step: "documents",
-      },
-      "Registration details saved",
-    );
+  res,
+  {
+    student_id:
+      student.id,
+
+    registration_number:
+      student.registration_number,
+
+    portal_registration_number:
+      student.portal_registration_number ||
+      createPortalRegistrationNumber(
+        student,
+      ),
+
+    internship_status:
+      student.internship_status,
+
+    registration_locked:
+      false,
+
+    next_step:
+      "documents",
+  },
+
+  "Registration details saved",
+);
   },
 );
 
@@ -717,19 +770,33 @@ export const lockRegistration =
       registration_locked: true,
     });
 
-    return ok(
-      res,
-      {
-        student_id: student.id,
-        registration_number:
-          student.registration_number,
-        registration_locked: true,
-        payment_status:
-          student.payment_status,
-        next_step: "payment",
-      },
-      "Registration confirmed and locked",
-    );
+   return ok(
+  res,
+  {
+    student_id:
+      student.id,
+
+    registration_number:
+      student.registration_number,
+
+    portal_registration_number:
+      student.portal_registration_number ||
+      createPortalRegistrationNumber(
+        student,
+      ),
+
+    registration_locked:
+      true,
+
+    payment_status:
+      student.payment_status,
+
+    next_step:
+      "payment",
+  },
+
+  "Registration confirmed and locked",
+);
   });
 
 export const createPaymentOrder = asyncHandler(
@@ -861,6 +928,12 @@ export const createPaymentOrder = asyncHandler(
         student.id,
       );
 
+      const portalRegistrationNumber =
+  student.portal_registration_number ||
+  createPortalRegistrationNumber(
+    student,
+  );
+
     const payload = {
       order_id: orderId,
       order_amount: Number(
@@ -895,19 +968,24 @@ export const createPaymentOrder = asyncHandler(
       order_note:
         `Internship payment for ${student.domain.domain_name}`,
 
-      order_tags: {
-        student_id:
-          String(student.id),
+     order_tags: {
+  student_id:
+    String(student.id),
 
-        registration_number:
-          String(
-            student.registration_number ||
-              "",
-          ),
+  registration_number:
+    String(
+      student.registration_number ||
+        "",
+    ),
 
-        domain_id:
-          String(student.domain.id),
-      },
+  portal_registration_number:
+    portalRegistrationNumber,
+
+  domain_id:
+    String(
+      student.domain.id,
+    ),
+},
     };
 
     let cashfreeOrder;
@@ -997,6 +1075,8 @@ export const createPaymentOrder = asyncHandler(
           mobile: student.mobile,
           registration_number:
             student.registration_number,
+            portal_registration_number:
+          portalRegistrationNumber,
         },
 
         domain: {
@@ -1099,47 +1179,98 @@ export const verifyCashfreePayment = async (
      * Idempotency:
      * If already successful, don't process twice.
      */
-    if (payment.status === "success") {
-      const student =
-        await Student.findByPk(
-          payment.student_id,
-          {
-            transaction,
-          },
-        );
+    if (
+  payment.status ===
+  "success"
+) {
+  const student =
+    await Student.findByPk(
+      payment.student_id,
+      {
+        transaction,
+        lock:
+          transaction.LOCK.UPDATE,
+      },
+    );
 
-      await transaction.commit();
+  if (!student) {
+    throw new AppError(
+      "Student record not found",
+      404,
+    );
+  }
 
-      try {
-  await ensurePaymentReceipt(
-    payment.id,
-  );
-} catch (receiptError) {
-  console.error(
-    "EXISTING PAYMENT RECEIPT ERROR:",
-    receiptError,
-  );
+  const portalRegistrationNumber =
+    student.portal_registration_number ||
+    createPortalRegistrationNumber(
+      student,
+    );
+
+  if (
+    !student.portal_registration_number
+  ) {
+
+    await student.update(
+  {
+    portal_registration_number:
+      portalRegistrationNumber,
+
+    registration_locked:
+      true,
+
+    payment_status:
+      "paid",
+  },
+  {
+    transaction,
+  },
+);
+
+  }
+
+  await transaction.commit();
+
+  try {
+    await ensurePaymentReceipt(
+      payment.id,
+    );
+  } catch (
+    receiptError
+  ) {
+    console.error(
+      "EXISTING PAYMENT RECEIPT ERROR:",
+      receiptError,
+    );
+  }
+
+  return res.json({
+    success: true,
+
+    data: {
+      order_id:
+        orderId,
+
+      transaction_id:
+        payment.transaction_id,
+
+      cf_payment_id:
+        payment.cf_payment_id ||
+        null,
+
+      portal_registration_number:
+        portalRegistrationNumber,
+
+      payment_status:
+        "paid",
+
+      internship_status:
+  student.internship_status,
+    },
+
+    message:
+      "Payment already verified",
+  });
 }
-
-      return res.json({
-        success: true,
-        data: {
-          order_id: orderId,
-          transaction_id:
-            payment.transaction_id,
-          cf_payment_id:
-            payment.cf_payment_id || null,
-          payment_status:
-            student?.payment_status ||
-            "paid",
-          internship_status:
-            student?.internship_status ||
-            "active",
-        },
-        message:
-          "Payment already verified",
-      });
-    }
 
     const orderResponse =
       await axios.get(
@@ -1199,17 +1330,7 @@ export const verifyCashfreePayment = async (
 
       await transaction.commit();
 
-    try {
-  await ensurePaymentReceipt(
-    payment.id,
-  );
-} catch (receiptError) {
-  console.error(
-    "PAYMENT RECEIPT GENERATION ERROR:",
-    receiptError,
-  );
-}
-
+   
       return res.status(202).json({
         success: true,
         data: {
@@ -1312,48 +1433,72 @@ export const verifyCashfreePayment = async (
       );
     }
 
-    await student.update(
-      {
-        payment_status: "paid",
-        internship_status:
-          "active",
-      },
-      {
-        transaction,
-      },
-    );
+   const portalRegistrationNumber =
+  student.portal_registration_number ||
+  createPortalRegistrationNumber(
+    student,
+  );
 
+await student.update(
+  {
+    payment_status:
+      "paid",
+
+    internship_status:
+      "registered",
+
+    registration_locked:
+      true,
+
+    portal_registration_number:
+      portalRegistrationNumber,
+
+    internship_start_date:
+      null,
+
+    internship_end_date:
+      null,
+  },
+  {
+    transaction,
+  },
+);
     await transaction.commit();
 
     return res.json({
       success: true,
-      data: {
-        order_id:
-          cashfreeOrder.order_id,
+     data: {
+  order_id:
+    cashfreeOrder.order_id,
 
-        cf_order_id:
-          cashfreeOrder.cf_order_id,
+  cf_order_id:
+    cashfreeOrder.cf_order_id,
 
-        transaction_id:
-          payment.transaction_id,
+  transaction_id:
+    payment.transaction_id,
 
-        cf_payment_id:
-          successfulAttempt?.cf_payment_id
-            ? String(successfulAttempt.cf_payment_id)
-            : null,
+  portal_registration_number:
+    portalRegistrationNumber,
 
-        payment_status:
-          "paid",
+  cf_payment_id:
+    successfulAttempt?.cf_payment_id
+      ? String(
+          successfulAttempt.cf_payment_id,
+        )
+      : null,
 
-        internship_status:
-          "active",
+  payment_status:
+    "paid",
 
-        amount:
-          cashfreeOrder.order_amount,
+  internship_status:
+    "registered",
 
-        currency:
-          cashfreeOrder.order_currency,
-      },
+  amount:
+    cashfreeOrder.order_amount,
+
+  currency:
+    cashfreeOrder.order_currency,
+},
       message:
         "Payment verified and account activated successfully",
     });
@@ -1507,29 +1652,75 @@ export const cashfreeWebhook =
       }
 
       if (
-        payment.status === "success" &&
-        student.payment_status === "paid"
-      ) {
-        await transaction.commit();
+  payment.status ===
+    "success" &&
+  student.payment_status ===
+    "paid"
+) {
+  const portalRegistrationNumber =
+    student.portal_registration_number ||
+    createPortalRegistrationNumber(
+      student,
+    );
 
+  if (
+    !student.portal_registration_number
+  ) {
+    await student.update(
+  {
+    payment_status:
+      "paid",
+
+    internship_status:
+      "registered",
+
+    registration_locked:
+      true,
+
+    portal_registration_number:
+      portalRegistrationNumber,
+
+    internship_start_date:
+      null,
+
+    internship_end_date:
+      null,
+  },
+  {
+    transaction,
+  },
+);
+  }
+
+  await transaction.commit();
 
   try {
     await ensurePaymentReceipt(
       payment.id,
     );
-  } catch (receiptError) {
+  } catch (
+    receiptError
+  ) {
     console.error(
       "EXISTING WEBHOOK RECEIPT ERROR:",
       receiptError,
     );
   }
 
-        return res.status(200).json({
-          success: true,
-          message:
-            "Webhook already processed",
-        });
-      }
+  return res.status(
+    200,
+  ).json({
+    success: true,
+
+    data: {
+      portal_registration_number:
+        portalRegistrationNumber,
+    },
+
+    message:
+      "Webhook already processed",
+  });
+}
 
       const expectedAmount = Number(
         payment.amount,
@@ -1584,14 +1775,30 @@ export const cashfreeWebhook =
         { transaction },
       );
 
-      await student.update(
-        {
-          payment_status: "paid",
-          internship_status: "active",
-          registration_locked: true,
-        },
-        { transaction },
-      );
+      const portalRegistrationNumber =
+  student.portal_registration_number ||
+  createPortalRegistrationNumber(
+    student,
+  );
+
+await student.update(
+  {
+    payment_status:
+      "paid",
+
+    internship_status:
+      "active",
+
+    registration_locked:
+      true,
+
+    portal_registration_number:
+      portalRegistrationNumber,
+  },
+  {
+    transaction,
+  },
+);
 
       await transaction.commit();
       
@@ -1882,11 +2089,18 @@ const writePaymentReceiptContent = (
   doc.moveDown(0.8);
 
   addReceiptRow(
-    doc,
-    "Registration Number",
-    student.registration_number,
-  );
+  doc,
+  "RK Nexora Registration No.",
+  student.portal_registration_number ||
+    "-",
+);
 
+addReceiptRow(
+  doc,
+  "College Registration No.",
+  student.registration_number ||
+    "-",
+);
   addReceiptRow(
     doc,
     "Student Name",

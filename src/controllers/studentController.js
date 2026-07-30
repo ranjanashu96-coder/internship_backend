@@ -70,6 +70,154 @@ const getCurrentStudent = async (
   return student;
 };
 
+/*
+|--------------------------------------------------------------------------
+| Internship Start Access Control
+|--------------------------------------------------------------------------
+*/
+
+const getIndiaToday = () => {
+  const formatter =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          "Asia/Kolkata",
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+      },
+    );
+
+  const parts =
+    formatter.formatToParts(
+      new Date(),
+    );
+
+  const values =
+    Object.fromEntries(
+      parts
+        .filter(
+          (part) =>
+            part.type !==
+            "literal",
+        )
+        .map(
+          (part) => [
+            part.type,
+            part.value,
+          ],
+        ),
+    );
+
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+
+const ensureInternshipStarted =
+  async (
+    student,
+  ) => {
+    /*
+    |--------------------------------------------------------------------------
+    | Payment must be completed
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      student.payment_status !==
+      "paid"
+    ) {
+      throw new AppError(
+        "Complete payment before accessing internship activities",
+        403,
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Blocked student
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      student.internship_status ===
+      "blocked"
+    ) {
+      throw new AppError(
+        "Your internship access is blocked",
+        403,
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Admin has not assigned start date
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      !student.internship_start_date
+    ) {
+      throw new AppError(
+        "Your internship has not been started by the administrator yet",
+        403,
+      );
+    }
+
+    const today =
+      getIndiaToday();
+
+    const startDate =
+      String(
+        student
+          .internship_start_date,
+      ).slice(
+        0,
+        10,
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Start date is still in future
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      today <
+      startDate
+    ) {
+      throw new AppError(
+        `Your internship will start on ${startDate}`,
+        403,
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Start date reached
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      student.internship_status ===
+      "registered"
+    ) {
+      await student.update({
+        internship_status:
+          "active",
+      });
+    }
+
+    return true;
+  };
+
 const toNumber = (value) => {
   const parsedValue = Number(value);
 
@@ -1387,6 +1535,12 @@ export const dashboard = asyncHandler(
 
         payment_status:
           student.payment_status,
+        
+          internship_start_date:
+  student.internship_start_date,
+
+internship_end_date:
+  student.internship_end_date,
 
         college:
           student.college
@@ -2277,6 +2431,11 @@ export const learning = asyncHandler(
     const student =
       await getCurrentStudent(req);
 
+    await ensureInternshipStarted(
+      student,
+    );
+
+
     if (!student.domain_id) {
       return ok(res, {
         modules: [],
@@ -2971,6 +3130,10 @@ export const completeChapter =
   asyncHandler(async (req, res) => {
     const student =
       await getCurrentStudent(req);
+
+      await ensureInternshipStarted(
+  student,
+);
 
     const chapterId = Number(
       req.params.chapterId,
@@ -3681,6 +3844,10 @@ export const getAttendance =
     const student =
       await getCurrentStudent(req);
 
+      await ensureInternshipStarted(
+  student,
+);
+
     const {
       from_date,
       to_date,
@@ -3832,6 +3999,10 @@ export const getAttendanceCalendar =
     const student =
       await getCurrentStudent(req);
 
+      await ensureInternshipStarted(
+      student,
+    );
+
     const currentDate = new Date();
 
     const month = Math.min(
@@ -3960,6 +4131,10 @@ export const getTodayAttendance =
     const student =
       await getCurrentStudent(req);
 
+       await ensureInternshipStarted(
+      student,
+    );
+
     const { date } =
       getIndiaDateParts();
 
@@ -4023,6 +4198,9 @@ export const checkInAttendance =
   asyncHandler(async (req, res) => {
     const student =
       await getCurrentStudent(req);
+      await ensureInternshipStarted(
+      student,
+    );
 
     const { date, time } =
       getIndiaDateParts();
@@ -4106,6 +4284,10 @@ export const checkOutAttendance =
   asyncHandler(async (req, res) => {
     const student =
       await getCurrentStudent(req);
+
+      await ensureInternshipStarted(
+      student,
+    );
 
     const { date, time } =
       getIndiaDateParts();

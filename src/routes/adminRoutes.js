@@ -89,6 +89,7 @@ import {
   listBulkJobs,
   cancelBulkJob,
   retryBulkJob,
+  startStudentInternship,
 } from "../controllers/adminController.js";
 
 
@@ -203,6 +204,11 @@ router.post(
 */
 
 router.get("/students", list("students"));
+router.patch(
+  "/students/:id/start-internship",
+  startStudentInternship,
+);
+
 
 router.post(
   "/students/import",
