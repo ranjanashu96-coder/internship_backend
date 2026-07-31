@@ -14,6 +14,7 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import publicRoutes from "./routes/publicRoutes.js";
 import registrationRoutes from "./routes/registrationRoutes.js";
 import publicCertificateRoutes from "./routes/publicCertificateRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 
 import {
   notFound,
@@ -196,6 +197,11 @@ app.use(
 app.use(
   "/api/student",
   studentRoutes,
+);
+
+app.use(
+  "/api/notifications",
+  notificationRoutes,
 );
 
 app.use(

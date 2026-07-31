@@ -1223,6 +1223,205 @@ export const BulkJob = define(
     ],
   },
 );
+
+
+/*
+|--------------------------------------------------------------------------
+| Notifications
+|--------------------------------------------------------------------------
+*/
+
+export const Notification = define(
+  "Notification",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    recipient_type: {
+      type: DataTypes.ENUM(
+        "student",
+        "mentor",
+        "college_admin",
+        "admin",
+        "super_admin",
+      ),
+      allowNull: false,
+    },
+
+    recipient_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    type: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+      defaultValue: "info",
+    },
+
+    title: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    message: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+
+    action_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
+
+    metadata_json: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+
+    is_read: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+
+    read_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    ...common,
+  },
+  {
+    tableName: "notifications",
+
+    indexes: [
+      {
+        name: "idx_notification_recipient",
+        fields: [
+          "recipient_type",
+          "recipient_id",
+          "created_at",
+        ],
+      },
+
+      {
+        name: "idx_notification_unread",
+        fields: [
+          "recipient_type",
+          "recipient_id",
+          "is_read",
+        ],
+      },
+    ],
+  },
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Email Queue
+|--------------------------------------------------------------------------
+*/
+
+export const EmailQueue = define(
+  "EmailQueue",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    notification_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: true,
+    },
+
+    recipient_email: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    recipient_name: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    subject: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    html_body: {
+      type: DataTypes.TEXT("long"),
+      allowNull: false,
+    },
+
+    text_body: {
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "queued",
+        "sending",
+        "sent",
+        "failed",
+      ),
+      allowNull: false,
+      defaultValue: "queued",
+    },
+
+    attempts: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    max_attempts: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 3,
+    },
+
+    error_message: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
+    scheduled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    ...common,
+  },
+  {
+    tableName: "email_queue",
+
+    indexes: [
+      {
+        name: "idx_email_queue_status",
+        fields: [
+          "status",
+          "scheduled_at",
+        ],
+      },
+    ],
+  },
+);
+
+
 export const PasswordReset=define("PasswordReset",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},email:{type:DataTypes.STRING(191),allowNull:false},token_hash:{type:DataTypes.STRING(255),allowNull:false},expires_at:{type:DataTypes.DATE,allowNull:false},used_at:DataTypes.DATE,...common},{tableName:"password_resets"});
 
 export const RefreshToken = define(
@@ -1612,6 +1811,26 @@ QuizAnswer.belongsTo(QuizAttempt, {
   foreignKey: "attempt_id",
   as: "attempt",
 });
+
+Notification.hasMany(
+  EmailQueue,
+  {
+    foreignKey:
+      "notification_id",
+
+    as: "emails",
+  },
+);
+
+EmailQueue.belongsTo(
+  Notification,
+  {
+    foreignKey:
+      "notification_id",
+
+    as: "notification",
+  },
+);
 
 export { sequelize , Quiz,QuizAttempt, QuizAnswer,};
  

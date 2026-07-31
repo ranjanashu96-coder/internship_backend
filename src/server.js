@@ -1,6 +1,4 @@
-import dotenv from "dotenv";
-
-dotenv.config();
+import "dotenv/config";
 
 import app from "./app.js";
 import sequelize from "./config/database.js";
@@ -11,11 +9,21 @@ import {
   bulkJobRunner,
 } from "./jobs/bulkJobRunner.js";
 
+import {
+  startEmailQueueWorker,
+} from "./services/emailQueueWorker.js";
+
+import {
+  verifyEmailConnection,
+} from "./services/emailService.js";
+
+
 const port =
   Number(
     process.env.PORT ||
       5000,
   );
+
 
 try {
   /*
@@ -30,16 +38,10 @@ try {
     "✅ MySQL connected",
   );
 
+
   /*
   |--------------------------------------------------------------------------
   | Resume Pending Bulk Jobs
-  |--------------------------------------------------------------------------
-  |
-  | Agar server / PM2 restart ho gaya ho:
-  |
-  | queued  -> dobara queue me jayega
-  | running -> queued karke dobara resume hoga
-  |
   |--------------------------------------------------------------------------
   */
 
@@ -52,15 +54,52 @@ try {
       `🔄 Bulk jobs resumed: ${resumedJobs}`,
     );
   } catch (error) {
-    /*
-     * Bulk resume fail hone par
-     * poora API server band nahi hoga.
-     */
     console.error(
       "❌ Bulk job resume failed:",
       error,
     );
   }
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | Email / SMTP
+  |--------------------------------------------------------------------------
+  */
+
+  const emailConfigured =
+    Boolean(
+      process.env.SMTP_HOST &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS,
+    );
+
+  if (emailConfigured) {
+    try {
+      await verifyEmailConnection();
+
+      console.log(
+        "✅ SMTP connected",
+      );
+
+      startEmailQueueWorker();
+    } catch (error) {
+      /*
+       * Email fail hone se
+       * poora backend band nahi hoga.
+       */
+      console.error(
+        "❌ SMTP connection failed:",
+        error?.message ||
+          error,
+      );
+    }
+  } else {
+    console.warn(
+      "⚠️ SMTP not configured. Email worker not started.",
+    );
+  }
+
 
   /*
   |--------------------------------------------------------------------------
