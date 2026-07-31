@@ -85,7 +85,7 @@ export const attendanceLogTemplate = ({
           <div>
             <div class="info-line"><span class="label">Student Name</span><span>:</span><span>${escapeHtml(student.name)}</span></div>
             <div class="info-line"><span class="label">Programme</span><span>:</span><span>${escapeHtml(student.programme || "-")}</span></div>
-            <div class="info-line"><span class="label">Roll Number</span><span>:</span><span>${escapeHtml(student.student_id || student.registration_number || "-")}</span></div>
+            <div class="info-line"><span class="label">Internsghip Registration  Number</span><span>:</span><span>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</span></div>
             <div class="info-line"><span class="label">Internship Period</span><span>:</span><span>${escapeHtml(`${formatDateNumeric(internship.start_date)} - ${formatDateNumeric(internship.end_date)}`)}</span></div>
           </div>
           <div>

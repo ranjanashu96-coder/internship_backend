@@ -74,7 +74,7 @@ export const certificateTemplate = ({
         <div class="certificate-meta">
           <strong>Certificate No.:</strong> ${escapeHtml(certificate.certificate_number)}<br />
           <strong>Issued Date:</strong> ${escapeHtml(formatDate(certificate.issued_date))}<br />
-          <strong>University Roll No.:</strong> ${escapeHtml(student.student_id || student.registration_number || "-")}
+          <strong>Internsghip Registration No.:</strong> ${escapeHtml(student.portal_registration_number || student.registration_number || "-")}
         </div>
         <div class="qr">${qrDataUri ? `<img src="${qrDataUri}" alt="Verification QR" /><br />` : ""}Scan to verify</div>
         <div class="signatory">

@@ -57,7 +57,7 @@ export const assessmentMarksheetTemplate = ({
       <table class="student-table">
         <tr><td>Student Name</td><td>${escapeHtml(student.name)}</td></tr>
         <tr><td>College Name</td><td>${escapeHtml(college.name)}</td></tr>
-        <tr><td>University Roll No</td><td>${escapeHtml(student.student_id || student.registration_number || "-")}</td></tr>
+        <tr><td>Internsghip Registration  Number</td><td>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</td></tr>
         <tr><td>Department</td><td>${escapeHtml(student.programme || "-")}</td></tr>
         <tr><td>Semester</td><td>${escapeHtml(student.semester || "-")}</td></tr>
         <tr><td>Internship Topic</td><td>${escapeHtml(domain.domain_name || "-")}</td></tr>

@@ -99,7 +99,7 @@ export const offerLetterTemplate = ({
       <div class="recipient">
         <div><strong>To,</strong></div>
         <strong>${escapeHtml(student.name)}</strong>
-        <strong>Roll No. : ${escapeHtml(student.student_id || student.registration_number || "-")}</strong>
+       
         <strong>College: ${escapeHtml(college.name)}</strong>
       </div>
 

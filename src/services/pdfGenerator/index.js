@@ -24,7 +24,7 @@ const defaultCompany = {
   cin: "U85499BR2026PTC086757",
   address: "C/O MUKESH KUMAR, KHIRI, PS ATRI, JETHIYAN, Jethian, Atri, Gaya - 805236, Bihar, India",
   email: "rknexorapvtltd@gmail.com",
-  phone: "8544233076",
+  phone: "9693275424",
   website: "www.rknexora.org",
   signatory_name: "Kumud Bihari",
   signatory_designation: "Managing Director",

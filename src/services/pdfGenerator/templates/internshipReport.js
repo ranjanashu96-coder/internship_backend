@@ -91,7 +91,7 @@ export const internshipReportTemplate = ({
         <tr><td>Name of the IPO</td><td>:</td><td>${escapeHtml(company.name)}</td></tr>
         <tr><td>Name of Student</td><td>:</td><td>${escapeHtml(student.name)}</td></tr>
         <tr><td>Programme</td><td>:</td><td>${escapeHtml(student.programme || "-")}</td></tr>
-        <tr><td>University Roll Number</td><td>:</td><td>${escapeHtml(student.student_id || student.registration_number || "-")}</td></tr>
+        <tr><td> Internsghip Registration  Number</td><td>:</td><td>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</td></tr>
         <tr><td>Semester</td><td>:</td><td>${escapeHtml(student.semester || "-")}</td></tr>
         <tr><td>Session</td><td>:</td><td>${escapeHtml(student.session || "-")}</td></tr>
       </table>
