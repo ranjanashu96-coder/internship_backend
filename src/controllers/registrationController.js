@@ -22,6 +22,10 @@ import {
 } from "../utils/security.js";
 
 import {
+  notify,
+} from "../services/notificationService.js";
+
+import {
   getCashfreeBaseUrl,
   getCashfreeHeaders,
   verifyCashfreeWebhookSignature,
@@ -113,6 +117,187 @@ const parseJsonObject = (value) => {
     return {};
   }
 };
+
+const queuePaymentSuccessNotification =
+  async (paymentId) => {
+    const notificationTransaction =
+      await Payment.sequelize.transaction();
+
+    try {
+      const payment =
+        await Payment.findByPk(
+          paymentId,
+          {
+            transaction:
+              notificationTransaction,
+
+            lock:
+              notificationTransaction
+                .LOCK
+                .UPDATE,
+          },
+        );
+
+      if (
+        !payment ||
+        payment.status !==
+          "success"
+      ) {
+        await notificationTransaction
+          .commit();
+
+        return;
+      }
+
+      const gatewayPayload =
+        parseJsonObject(
+          payment.gateway_payload,
+        );
+
+      /*
+       * Verify API aur webhook dono payment
+       * process kar sakte hain. Ye flag duplicate
+       * notification aur email ko rokega.
+       */
+      if (
+        gatewayPayload
+          .payment_success_notification_queued_at
+      ) {
+        await notificationTransaction
+          .commit();
+
+        return;
+      }
+
+      const student =
+        await Student.findByPk(
+          payment.student_id,
+          {
+            transaction:
+              notificationTransaction,
+          },
+        );
+
+      if (!student) {
+        throw new Error(
+          "Student not found for payment notification",
+        );
+      }
+
+      const amount =
+        Number(
+          payment.amount ||
+            0,
+        );
+
+      const formattedAmount =
+        new Intl.NumberFormat(
+          "en-IN",
+          {
+            style:
+              "currency",
+
+            currency:
+              payment.currency ||
+              "INR",
+          },
+        ).format(amount);
+
+      await notify({
+        recipientType:
+          "student",
+
+        recipientId:
+          student.id,
+
+        type:
+          "payment_success",
+
+        title:
+          "Payment Successful",
+
+        message:
+          `Your internship registration payment of ${formattedAmount} has been received successfully. Your transaction ID is ${payment.transaction_id}.`,
+
+        actionUrl:
+          "/student/downloads",
+
+        metadata: {
+          payment_id:
+            payment.id,
+
+          transaction_id:
+            payment.transaction_id,
+
+          cashfree_order_id:
+            payment.cashfree_order_id,
+
+          amount,
+
+          currency:
+            payment.currency ||
+            "INR",
+        },
+
+        email:
+          student.email,
+
+        recipientName:
+          student.name,
+
+        sendEmail:
+          Boolean(
+            student.email,
+          ),
+
+        emailSubject:
+          "RK Nexora Payment Successful",
+
+        transaction:
+          notificationTransaction,
+      });
+
+      await payment.update(
+        {
+          gateway_payload: {
+            ...gatewayPayload,
+
+            payment_success_notification_queued_at:
+              new Date()
+                .toISOString(),
+          },
+        },
+        {
+          transaction:
+            notificationTransaction,
+        },
+      );
+
+      await notificationTransaction
+        .commit();
+
+      console.log(
+        `✅ Payment notification queued for student ${student.id}`,
+      );
+    } catch (error) {
+      if (
+        !notificationTransaction
+          .finished
+      ) {
+        await notificationTransaction
+          .rollback();
+      }
+
+      /*
+       * Notification fail hone par payment
+       * success response fail nahi hoga.
+       */
+      console.error(
+        "PAYMENT SUCCESS NOTIFICATION ERROR:",
+        error,
+      );
+    }
+  };
 
 const getStudentDocuments = (student) => {
   const academics = parseJsonObject(
@@ -1243,6 +1428,10 @@ export const verifyCashfreePayment = async (
     );
   }
 
+  await queuePaymentSuccessNotification(
+  payment.id,
+);
+
   return res.json({
     success: true,
 
@@ -1464,6 +1653,11 @@ await student.update(
   },
 );
     await transaction.commit();
+    
+    await queuePaymentSuccessNotification(
+  payment.id,
+);
+
 
     return res.json({
       success: true,
@@ -1787,13 +1981,19 @@ await student.update(
       "paid",
 
     internship_status:
-      "active",
+      "registered",
 
     registration_locked:
       true,
 
     portal_registration_number:
       portalRegistrationNumber,
+
+    internship_start_date:
+      null,
+
+    internship_end_date:
+      null,
   },
   {
     transaction,

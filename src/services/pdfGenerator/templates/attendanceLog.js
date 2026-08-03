@@ -18,6 +18,18 @@ export const attendanceLogTemplate = ({
   internship,
   attendanceRecords,
 }) => {
+
+
+  const portalRegistrationNumber =
+    student.portal_registration_number ||
+    student.internship_registration_number ||
+    "-";
+
+  const collegeRegistrationNumber =
+    student.registration_number ||
+    student.college_registration_number ||
+    "-";
+
   const totalHours = calculateTotalHours(attendanceRecords);
   const requiredHours = numberValue(
     internship.duration_hours || domain.duration_hours,
@@ -52,8 +64,12 @@ export const attendanceLogTemplate = ({
         .info-box { border: 1.3px solid #161616; margin-bottom: 9px; padding: 7px 10px; }
         .info-title { text-align: center; text-decoration: underline; font-weight: 700; margin-bottom: 6px; }
         .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; }
-        .info-line { display: grid; grid-template-columns: 112px 8px 1fr; gap: 2px; margin-bottom: 3px; }
-        .info-line .label { font-weight: 700; }
+.info-line {
+  display: grid;
+  grid-template-columns: 145px 8px 1fr;
+  gap: 2px;
+  margin-bottom: 3px;
+}        .info-line .label { font-weight: 700; }
         .attendance-table { table-layout: fixed; border: 1.3px solid #111; }
         .attendance-table th, .attendance-table td { border: 1px solid #111; padding: 5px 3px; text-align: center; vertical-align: middle; }
         .attendance-table th { font-size: 9.5px; font-weight: 700; }
@@ -81,20 +97,67 @@ export const attendanceLogTemplate = ({
 
       <div class="info-box avoid-break">
         <div class="info-title">Intern Details</div>
-        <div class="two-column">
-          <div>
-            <div class="info-line"><span class="label">Student Name</span><span>:</span><span>${escapeHtml(student.name)}</span></div>
-            <div class="info-line"><span class="label">Programme</span><span>:</span><span>${escapeHtml(student.programme || "-")}</span></div>
-            <div class="info-line"><span class="label">Internsghip Registration  Number</span><span>:</span><span>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</span></div>
-            <div class="info-line"><span class="label">Internship Period</span><span>:</span><span>${escapeHtml(`${formatDateNumeric(internship.start_date)} - ${formatDateNumeric(internship.end_date)}`)}</span></div>
-          </div>
-          <div>
-            <div class="info-line"><span class="label">College Name</span><span>:</span><span>${escapeHtml(college.name)}</span></div>
-            <div class="info-line"><span class="label">Internship Topic</span><span>:</span><span>${escapeHtml(domain.domain_name || "-")}</span></div>
-            <div class="info-line"><span class="label">Registration No.</span><span>:</span><span>${escapeHtml(student.registration_number || "-")}</span></div>
-            <div class="info-line"><span class="label">Total Hours</span><span>:</span><span>${escapeHtml(requiredHours)}</span></div>
-          </div>
-        </div>
+       <div class="two-column">
+  <div>
+    <div class="info-line">
+      <span class="label">Student Name</span>
+      <span>:</span>
+      <span>${escapeHtml(student.name)}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">Programme</span>
+      <span>:</span>
+      <span>${escapeHtml(student.programme || "-")}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">Portal Registration No.</span>
+      <span>:</span>
+      <span>${escapeHtml(portalRegistrationNumber)}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">Internship Period</span>
+      <span>:</span>
+      <span>
+        ${escapeHtml(
+          `${formatDateNumeric(
+            internship.start_date,
+          )} - ${formatDateNumeric(
+            internship.end_date,
+          )}`,
+        )}
+      </span>
+    </div>
+  </div>
+
+  <div>
+    <div class="info-line">
+      <span class="label">College Name</span>
+      <span>:</span>
+      <span>${escapeHtml(college.name)}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">Internship Topic</span>
+      <span>:</span>
+      <span>${escapeHtml(domain.domain_name || "-")}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">College Registration No.</span>
+      <span>:</span>
+      <span>${escapeHtml(collegeRegistrationNumber)}</span>
+    </div>
+
+    <div class="info-line">
+      <span class="label">Total Hours</span>
+      <span>:</span>
+      <span>${escapeHtml(requiredHours)}</span>
+    </div>
+  </div>
+</div>
       </div>
 
       <div class="info-box avoid-break">

@@ -333,20 +333,20 @@ export const getStudentEligibility =
     |--------------------------------------------------------------------------
     */
 
-    const projectApproved =
-      Boolean(
-        await LiveProject.findOne({
-          where: {
-            student_id:
-              studentId,
+    // const projectApproved =
+    //   Boolean(
+    //     await LiveProject.findOne({
+    //       where: {
+    //         student_id:
+    //           studentId,
 
-            status:
-              "approved",
-          },
+    //         status:
+    //           "approved",
+    //       },
 
-          attributes: ["id"],
-        }),
-      );
+    //       attributes: ["id"],
+    //     }),
+    //   );
 
     /*
     |--------------------------------------------------------------------------
@@ -403,8 +403,8 @@ export const getStudentEligibility =
         attendancePercentage >=
           minimumAttendance,
 
-      project_approved:
-        projectApproved,
+      // project_approved:
+      //   projectApproved,
 
       report_approved:
         reportApproved,

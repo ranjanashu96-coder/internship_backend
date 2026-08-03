@@ -9,6 +9,17 @@ export const assessmentMarksheetTemplate = ({
   result,
   company,
 }) => {
+
+  const portalRegistrationNumber =
+  student.portal_registration_number ||
+  student.internship_registration_number ||
+  "-";
+
+const collegeRegistrationNumber =
+  student.registration_number ||
+  student.college_registration_number ||
+  "-";
+
   const percentage = numberValue(
     result?.score_percentage || assessment?.percentage || assessment?.score_percentage,
   );
@@ -54,15 +65,42 @@ export const assessmentMarksheetTemplate = ({
       </div>
       <div class="blue-line"></div>
 
-      <table class="student-table">
-        <tr><td>Student Name</td><td>${escapeHtml(student.name)}</td></tr>
-        <tr><td>College Name</td><td>${escapeHtml(college.name)}</td></tr>
-        <tr><td>Internsghip Registration  Number</td><td>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</td></tr>
-        <tr><td>Department</td><td>${escapeHtml(student.programme || "-")}</td></tr>
-        <tr><td>Semester</td><td>${escapeHtml(student.semester || "-")}</td></tr>
-        <tr><td>Internship Topic</td><td>${escapeHtml(domain.domain_name || "-")}</td></tr>
-      </table>
+     <table class="student-table">
+  <tr>
+    <td>Student Name</td>
+    <td>${escapeHtml(student.name)}</td>
+  </tr>
 
+  <tr>
+    <td>College Name</td>
+    <td>${escapeHtml(college.name)}</td>
+  </tr>
+
+  <tr>
+    <td>Internship Portal Registration Number</td>
+    <td>${escapeHtml(portalRegistrationNumber)}</td>
+  </tr>
+
+  <tr>
+    <td>College Registration Number</td>
+    <td>${escapeHtml(collegeRegistrationNumber)}</td>
+  </tr>
+
+  <tr>
+    <td>Department</td>
+    <td>${escapeHtml(student.programme || "-")}</td>
+  </tr>
+
+  <tr>
+    <td>Semester</td>
+    <td>${escapeHtml(student.semester || "-")}</td>
+  </tr>
+
+  <tr>
+    <td>Internship Topic</td>
+    <td>${escapeHtml(domain.domain_name || "-")}</td>
+  </tr>
+</table>
       <div class="result-panel">
         <h2>Assessment Results</h2>
         <div class="result-row"><span>Score Percentage:</span><strong>${escapeHtml(percentage)}%</strong></div>

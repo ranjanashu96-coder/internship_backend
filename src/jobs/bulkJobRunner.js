@@ -3025,87 +3025,184 @@ async generateCertificates(
       .slice(0, 10);
 
   const files = [];
+  const skipped = [];
+  const failed = [];
+
   let processed = 0;
 
-  for (const student of students) {
+  for (
+    const student of students
+  ) {
     await this.assertNotCancelled(
-  job,
-);
-    const eligibility =
-  await getStudentEligibility(
-    student.id,
-    student.domain_id,
-  );
-
-if (!eligibility.eligible) {
-  processed += 1;
-
-  if (!options.silent) {
-    await this.updateProgress(
       job,
-      processed,
-      students.length,
     );
-  }
 
-  continue;
-}
-    const certificateNumber =
-      `${
-        payload.certificate_prefix ||
-        "RKN"
-      }-${
-        new Date(
-          issuedDate,
-        ).getFullYear()
-      }-${String(
-        student.id,
-      ).padStart(
-        7,
-        "0",
-      )}`;
+    try {
+      const eligibility =
+        await getStudentEligibility(
+          student.id,
+          student.domain_id,
+        );
 
-    const verificationUrl =
-  `${
-    process.env.CLIENT_URL ||
-    "http://localhost:3000"
-  }/verify-certificate/${encodeURIComponent(
-    certificateNumber,
-  )}`;
-    const documentResult =
-      await bulkPdfDocumentService
-        .generateCertificate({
-          student,
-          certificateNumber,
-          verificationUrl,
-          issuedDate,
-          generatedAt,
-
-          totalHours:
-            Number(
-              payload.total_hours ||
-              student.domain
-                ?.duration_hours ||
-              120,
-            ),
-        });
-
-    const [
-      certificate,
-      created,
-    ] =
-      await Certificate.findOrCreate({
-        where: {
+      console.log(
+        "CERTIFICATE ELIGIBILITY:",
+        {
           student_id:
             student.id,
-        },
 
-        defaults: {
+          registration_number:
+            student
+              .registration_number,
+
+          portal_registration_number:
+            student
+              .portal_registration_number,
+
+          eligible:
+            eligibility.eligible,
+
+          reasons:
+            eligibility.reasons,
+
+          eligibility,
+        },
+      );
+
+      if (!eligibility.eligible) {
+        const reason =
+          eligibility.reasons
+            ?.join(", ") ||
+          eligibility.message ||
+          "Student is not eligible for certificate";
+
+        skipped.push({
+          student_id:
+            student.id,
+
+          registration_number:
+            student
+              .registration_number,
+
+          reason,
+        });
+
+        processed += 1;
+
+        if (!options.silent) {
+          await this.updateProgress(
+            job,
+            processed,
+            students.length,
+            undefined,
+            {
+              success_count:
+                files.length,
+
+              failed_count:
+                skipped.length +
+                failed.length,
+            },
+          );
+        }
+
+        continue;
+      }
+
+      const certificateNumber =
+        `${
+          payload
+            .certificate_prefix ||
+          "RKN"
+        }-${
+          new Date(
+            issuedDate,
+          ).getFullYear()
+        }-${String(
+          student.id,
+        ).padStart(
+          7,
+          "0",
+        )}`;
+
+      const verificationUrl =
+        `${
+          process.env.CLIENT_URL ||
+          "http://localhost:3000"
+        }/verify-certificate/${encodeURIComponent(
+          certificateNumber,
+        )}`;
+
+      const documentResult =
+        await bulkPdfDocumentService
+          .generateCertificate({
+            student,
+
+            certificateNumber,
+
+            verificationUrl,
+
+            issuedDate,
+
+            generatedAt,
+
+            totalHours:
+              Number(
+                payload
+                  .total_hours ||
+                student.domain
+                  ?.duration_hours ||
+                120,
+              ),
+          });
+
+      if (
+        !documentResult?.file_url
+      ) {
+        throw new Error(
+          "Certificate PDF service did not return file_url",
+        );
+      }
+
+      const [
+        certificate,
+        created,
+      ] =
+        await Certificate.findOrCreate(
+          {
+            where: {
+              student_id:
+                student.id,
+            },
+
+            defaults: {
+              certificate_number:
+                certificateNumber,
+
+              certificate_url:
+                documentResult
+                  .file_url,
+
+              qr_code_url:
+                documentResult
+                  .qr_code_url,
+
+              verification_url:
+                verificationUrl,
+
+              issued_date:
+                issuedDate,
+            },
+          },
+        );
+
+      if (!created) {
+        await certificate.update({
           certificate_number:
             certificateNumber,
 
           certificate_url:
-            documentResult.file_url,
+            documentResult
+              .file_url,
 
           qr_code_url:
             documentResult
@@ -3116,16 +3213,49 @@ if (!eligibility.eligible) {
 
           issued_date:
             issuedDate,
-        },
+        });
+      }
+
+      await student.update({
+        certificate_generated:
+          true,
+
+        certificate_url:
+          documentResult
+            .file_url,
       });
 
-    if (!created) {
-      await certificate.update({
+      await this.saveGeneratedDocument(
+        student.id,
+        "certificate",
+        documentResult.file_url,
+        job,
+        {
+          generated_at:
+            generatedAt,
+
+          certificate_number:
+            certificateNumber,
+
+          qr_code_url:
+            documentResult
+              .qr_code_url,
+
+          verification_url:
+            verificationUrl,
+        },
+      );
+
+      files.push({
+        student_id:
+          student.id,
+
         certificate_number:
           certificateNumber,
 
         certificate_url:
-          documentResult.file_url,
+          documentResult
+            .file_url,
 
         qr_code_url:
           documentResult
@@ -3133,58 +3263,26 @@ if (!eligibility.eligible) {
 
         verification_url:
           verificationUrl,
+      });
+    } catch (error) {
+      console.error(
+        `Certificate failed for student ${student.registration_number}:`,
+        error,
+      );
 
-        issued_date:
-          issuedDate,
+      failed.push({
+        student_id:
+          student.id,
+
+        registration_number:
+          student
+            .registration_number,
+
+        error:
+          error?.message ||
+          "Certificate generation failed",
       });
     }
-
-    await student.update({
-      certificate_generated:
-        true,
-
-      certificate_url:
-        documentResult.file_url,
-    });
-
-    await this.saveGeneratedDocument(
-      student.id,
-      "certificate",
-      documentResult.file_url,
-      job,
-      {
-        generated_at:
-          generatedAt,
-
-        certificate_number:
-          certificateNumber,
-
-        qr_code_url:
-          documentResult
-            .qr_code_url,
-
-        verification_url:
-          verificationUrl,
-      },
-    );
-
-    files.push({
-      student_id:
-        student.id,
-
-      certificate_number:
-        certificateNumber,
-
-      certificate_url:
-        documentResult.file_url,
-
-      qr_code_url:
-        documentResult
-          .qr_code_url,
-
-      verification_url:
-        verificationUrl,
-    });
 
     processed += 1;
 
@@ -3193,6 +3291,15 @@ if (!eligibility.eligible) {
         job,
         processed,
         students.length,
+        undefined,
+        {
+          success_count:
+            files.length,
+
+          failed_count:
+            skipped.length +
+            failed.length,
+        },
       );
     }
   }
@@ -3204,11 +3311,36 @@ if (!eligibility.eligible) {
     certificates:
       files.length,
 
+    skipped_count:
+      skipped.length,
+
+    failed_count:
+      failed.length,
+
     issued_date:
       issuedDate,
 
     files,
+
+    skipped,
+
+    failed,
   };
+
+  /*
+   * Students mile, lekin ek bhi
+   * certificate generate nahi hua.
+   */
+  if (
+    students.length > 0 &&
+    files.length === 0
+  ) {
+    throw new Error(
+      skipped[0]?.reason ||
+      failed[0]?.error ||
+      "No certificate was generated",
+    );
+  }
 
   if (!options.silent) {
     await this.updateProgress(
@@ -3216,6 +3348,14 @@ if (!eligibility.eligible) {
       students.length,
       students.length,
       result,
+      {
+        success_count:
+          files.length,
+
+        failed_count:
+          skipped.length +
+          failed.length,
+      },
     );
   }
 

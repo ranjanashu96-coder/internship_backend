@@ -12,6 +12,7 @@ import {
   Student,
   Domain,
   BulkJob,
+  
 } from "../models/index.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -21,6 +22,9 @@ import {
   BULK_JOB_TYPES,
   bulkJobRunner,
 } from "../jobs/bulkJobRunner.js";
+import {
+  notify,
+} from "../services/notificationService.js";
 
 
 const modelMap = {
@@ -2675,11 +2679,89 @@ export const startStudentInternship =
         internship_start_date:
           startDate,
 
+          
+
         internship_status:
           startDate <= today
             ? "active"
             : "registered",
       });
+
+      const formattedStartDate =
+  new Intl.DateTimeFormat(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+      timeZone: "Asia/Kolkata",
+    },
+  ).format(
+    new Date(
+      `${startDate}T00:00:00+05:30`,
+    ),
+  );
+
+const internshipStarted =
+  startDate <= today;
+
+try {
+  await notify({
+    recipientType:
+      "student",
+
+    recipientId:
+      student.id,
+
+    type:
+      "internship",
+
+    title:
+      internshipStarted
+        ? "Internship Started"
+        : "Internship Scheduled",
+
+    message:
+      internshipStarted
+        ? `Your internship has started from ${formattedStartDate}. Learning and attendance are now available.`
+        : `Your internship is scheduled to start on ${formattedStartDate}. Learning and attendance will become available from this date.`,
+
+    actionUrl:
+      "/student",
+
+    metadata: {
+      student_id:
+        student.id,
+
+      start_date:
+        startDate,
+
+      internship_status:
+        student.internship_status,
+    },
+
+    email:
+      student.email,
+
+    recipientName:
+      student.name,
+
+    sendEmail:
+      Boolean(
+        student.email,
+      ),
+
+    emailSubject:
+      internshipStarted
+        ? "Your RK Nexora Internship Has Started"
+        : "Your RK Nexora Internship Start Date",
+  });
+} catch (notificationError) {
+  console.error(
+    "Internship notification failed:",
+    notificationError,
+  );
+}
 
       return ok(
         res,

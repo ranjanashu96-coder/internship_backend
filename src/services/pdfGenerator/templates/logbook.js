@@ -12,6 +12,17 @@ export const logbookTemplate = ({
   internship,
   logbookEntries,
 }) => {
+
+  const portalRegistrationNumber =
+    student.portal_registration_number ||
+    student.internship_registration_number ||
+    "-";
+
+  const collegeRegistrationNumber =
+    student.registration_number ||
+    student.college_registration_number ||
+    "-";
+
   const rows = logbookEntries
     .map(
       (entry, index) => `
@@ -37,8 +48,10 @@ export const logbookTemplate = ({
         h1 { text-align: center; font-size: 16px; margin: 4px 0 12px; }
         .header-box { border: 1.3px solid #111; padding: 8px 10px; margin-bottom: 10px; }
         .header-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 25px; }
-        .item { display: grid; grid-template-columns: 105px 8px 1fr; }
-        .item strong { font-weight: 700; }
+.item {
+  display: grid;
+  grid-template-columns: 145px 8px 1fr;
+}        .item strong { font-weight: 700; }
         .log-table { table-layout: fixed; border: 1.3px solid #111; }
         .log-table th, .log-table td { border: 1px solid #111; padding: 5px 4px; text-align: center; vertical-align: middle; }
         .log-table th { font-size: 9px; }
@@ -60,16 +73,61 @@ export const logbookTemplate = ({
     <body>
       <h1>INTERNSHIP DAILY LOG BOOK</h1>
       <div class="header-box">
-        <div class="header-grid">
-          <div class="item"><strong>Student Name</strong><span>:</span><span>${escapeHtml(student.name)}</span></div>
-          <div class="item"><strong>College</strong><span>:</span><span>${escapeHtml(college.name)}</span></div>
-          <div class="item"><strong>Internsghip Registration Number</strong><span>:</span><span>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</span></div>
-          <div class="item"><strong>Domain</strong><span>:</span><span>${escapeHtml(domain.domain_name || "-")}</span></div>
-          <div class="item"><strong>Session</strong><span>:</span><span>${escapeHtml(student.session || "-")}</span></div>
-          <div class="item"><strong>Mentor</strong><span>:</span><span>${escapeHtml(mentor?.name || "-")}</span></div>
-          <div class="item"><strong>Start Date</strong><span>:</span><span>${escapeHtml(formatDateNumeric(internship.start_date))}</span></div>
-          <div class="item"><strong>End Date</strong><span>:</span><span>${escapeHtml(formatDateNumeric(internship.end_date))}</span></div>
-        </div>
+       <div class="header-grid">
+  <div class="item">
+    <strong>Student Name</strong>
+    <span>:</span>
+    <span>${escapeHtml(student.name)}</span>
+  </div>
+
+  <div class="item">
+    <strong>College</strong>
+    <span>:</span>
+    <span>${escapeHtml(college.name)}</span>
+  </div>
+
+  <div class="item">
+    <strong>Portal Registration No.</strong>
+    <span>:</span>
+    <span>${escapeHtml(portalRegistrationNumber)}</span>
+  </div>
+
+  <div class="item">
+    <strong>College Registration No.</strong>
+    <span>:</span>
+    <span>${escapeHtml(collegeRegistrationNumber)}</span>
+  </div>
+
+  <div class="item">
+    <strong>Domain</strong>
+    <span>:</span>
+    <span>${escapeHtml(domain.domain_name || "-")}</span>
+  </div>
+
+  <div class="item">
+    <strong>Session</strong>
+    <span>:</span>
+    <span>${escapeHtml(student.session || "-")}</span>
+  </div>
+
+  <div class="item">
+    <strong>Mentor</strong>
+    <span>:</span>
+    <span>${escapeHtml(mentor?.name || "-")}</span>
+  </div>
+
+  <div class="item">
+    <strong>Start Date</strong>
+    <span>:</span>
+    <span>${escapeHtml(formatDateNumeric(internship.start_date))}</span>
+  </div>
+
+  <div class="item">
+    <strong>End Date</strong>
+    <span>:</span>
+    <span>${escapeHtml(formatDateNumeric(internship.end_date))}</span>
+  </div>
+</div>
       </div>
       <table class="log-table">
         <thead><tr><th>Sl.No</th><th>Date</th><th>Activity Performed</th><th>Skills Learned</th><th>Hours</th><th>Supervisor Signature</th></tr></thead>

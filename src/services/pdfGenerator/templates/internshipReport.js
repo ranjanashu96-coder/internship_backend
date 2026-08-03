@@ -25,6 +25,17 @@ export const internshipReportTemplate = ({
   result = {},
   reportContent = {},
 }) => {
+     
+  const portalRegistrationNumber =
+    student.portal_registration_number ||
+    student.internship_registration_number ||
+    "-";
+
+  const collegeRegistrationNumber =
+    student.registration_number ||
+    student.college_registration_number ||
+    "-";
+
   const topic = domain.domain_name || "Internship Domain";
   const durationHours = numberValue(
     internship.duration_hours || domain.duration_hours,
@@ -87,14 +98,49 @@ export const internshipReportTemplate = ({
       <h1>INTERNSHIP REPORT</h1>
       <div class="topic">Topic - ${escapeHtml(topic)}</div>
 
-      <table class="cover-details">
-        <tr><td>Name of the IPO</td><td>:</td><td>${escapeHtml(company.name)}</td></tr>
-        <tr><td>Name of Student</td><td>:</td><td>${escapeHtml(student.name)}</td></tr>
-        <tr><td>Programme</td><td>:</td><td>${escapeHtml(student.programme || "-")}</td></tr>
-        <tr><td> Internsghip Registration  Number</td><td>:</td><td>${escapeHtml(student.portal_registration_number || student.registration_number || "-")}</td></tr>
-        <tr><td>Semester</td><td>:</td><td>${escapeHtml(student.semester || "-")}</td></tr>
-        <tr><td>Session</td><td>:</td><td>${escapeHtml(student.session || "-")}</td></tr>
-      </table>
+     <table class="cover-details">
+  <tr>
+    <td>Name of the IPO</td>
+    <td>:</td>
+    <td>${escapeHtml(company.name)}</td>
+  </tr>
+
+  <tr>
+    <td>Name of Student</td>
+    <td>:</td>
+    <td>${escapeHtml(student.name)}</td>
+  </tr>
+
+  <tr>
+    <td>Programme</td>
+    <td>:</td>
+    <td>${escapeHtml(student.programme || "-")}</td>
+  </tr>
+
+  <tr>
+    <td>Internship Portal Registration Number</td>
+    <td>:</td>
+    <td>${escapeHtml(portalRegistrationNumber)}</td>
+  </tr>
+
+  <tr>
+    <td>College Registration Number</td>
+    <td>:</td>
+    <td>${escapeHtml(collegeRegistrationNumber)}</td>
+  </tr>
+
+  <tr>
+    <td>Semester</td>
+    <td>:</td>
+    <td>${escapeHtml(student.semester || "-")}</td>
+  </tr>
+
+  <tr>
+    <td>Session</td>
+    <td>:</td>
+    <td>${escapeHtml(student.session || "-")}</td>
+  </tr>
+</table>
 
       <div class="cover-signatures">
         <span>Signature of Student</span>
@@ -108,7 +154,7 @@ export const internshipReportTemplate = ({
       reportContent.acknowledgment ||
         `I express my sincere gratitude to ${company.brand_name || "Rnexora"}, ${company.name}, ${college.name}, my faculty mentors and the internship supervisor for their guidance and support. The structured activities, learning resources and regular feedback helped me complete this internship in ${topic} successfully. I also thank my family and peers for their encouragement throughout the programme.`,
     ) +
-      `<div class="student-note"><strong>${escapeHtml(student.name)}</strong><br />University Roll No. - ${escapeHtml(student.student_id || student.registration_number || "-")}</div>`,
+      `<div class="student-note"><strong>${escapeHtml(student.name)}</strong><br />University Roll No. - ${escapeHtml(student.registration_number || student.registration_number || "-")}</div>`,
   );
 
   const abstract = reportPage(

@@ -31,19 +31,73 @@ const defaultCompany = {
 };
 
 const resolveAssets = (assets = {}) => {
-  const assetRoot = path.resolve("src", "assets", "pdf");
+  const assetRoot = path.resolve(
+    "src",
+    "assets",
+    "pdf",
+  );
 
   return {
     logoDataUri: fileToDataUri(
-      assets.logo || path.join(assetRoot, "rknexora_logo_transparent.png"),
+      assets.logo ||
+        path.join(
+          assetRoot,
+          "rknexora_logo_transparent.png",
+        ),
     ),
+
     signatureDataUri: fileToDataUri(
-      assets.signature || path.join(assetRoot, "kumud_bihari_signature_TRUE_transparent.png"),
+      assets.signature ||
+        path.join(
+          assetRoot,
+          "kumud_bihari_signature_TRUE_transparent.png",
+        ),
     ),
+
     stampDataUri: fileToDataUri(
-      assets.stamp || path.join(assetRoot, "rknexora_stamp_transparent.png"),
+      assets.stamp ||
+        path.join(
+          assetRoot,
+          "rknexora_stamp_transparent.png",
+        ),
     ),
-    collegeLogoDataUri: fileToDataUri(assets.collegeLogo),
+
+    collegeLogoDataUri:
+      fileToDataUri(
+        assets.collegeLogo,
+      ),
+
+    aicteDataUri: fileToDataUri(
+      assets.aicte ||
+        path.join(
+          assetRoot,
+          "aicte.jpeg",
+        ),
+    ),
+
+    isoDataUri: fileToDataUri(
+      assets.iso ||
+        path.join(
+          assetRoot,
+          "iso.jpeg",
+        ),
+    ),
+
+    msmeDataUri: fileToDataUri(
+      assets.msme ||
+        path.join(
+          assetRoot,
+          "msme.jpeg",
+        ),
+    ),
+
+    mcaDataUri: fileToDataUri(
+      assets.mca ||
+        path.join(
+          assetRoot,
+          "mca.jpeg",
+        ),
+    ),
   };
 };
 
