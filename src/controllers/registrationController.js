@@ -1391,11 +1391,7 @@ export const verifyCashfreePayment = async (
       student,
     );
 
-  if (
-    !student.portal_registration_number
-  ) {
-
-    await student.update(
+  await student.update(
   {
     portal_registration_number:
       portalRegistrationNumber,
@@ -1405,13 +1401,14 @@ export const verifyCashfreePayment = async (
 
     payment_status:
       "paid",
+
+    internship_status:
+      "active",
   },
   {
     transaction,
   },
 );
-
-  }
 
   await transaction.commit();
 
@@ -1629,24 +1626,18 @@ export const verifyCashfreePayment = async (
   );
 
 await student.update(
-  {
+   {
     payment_status:
       "paid",
 
     internship_status:
-      "registered",
+      "active",
 
     registration_locked:
       true,
 
     portal_registration_number:
       portalRegistrationNumber,
-
-    internship_start_date:
-      null,
-
-    internship_end_date:
-      null,
   },
   {
     transaction,
@@ -1685,7 +1676,7 @@ await student.update(
     "paid",
 
   internship_status:
-    "registered",
+    "active",
 
   amount:
     cashfreeOrder.order_amount,
@@ -1857,34 +1848,24 @@ export const cashfreeWebhook =
       student,
     );
 
-  if (
-    !student.portal_registration_number
-  ) {
-    await student.update(
+ await student.update(
   {
     payment_status:
       "paid",
 
     internship_status:
-      "registered",
+      "active",
 
     registration_locked:
       true,
 
     portal_registration_number:
       portalRegistrationNumber,
-
-    internship_start_date:
-      null,
-
-    internship_end_date:
-      null,
   },
   {
     transaction,
   },
 );
-  }
 
   await transaction.commit();
 
@@ -1981,19 +1962,13 @@ await student.update(
       "paid",
 
     internship_status:
-      "registered",
+      "active",
 
     registration_locked:
       true,
 
     portal_registration_number:
       portalRegistrationNumber,
-
-    internship_start_date:
-      null,
-
-    internship_end_date:
-      null,
   },
   {
     transaction,
