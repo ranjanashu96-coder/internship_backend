@@ -92,6 +92,11 @@ import {
   startStudentInternship,
 } from "../controllers/adminController.js";
 
+import {
+  getAdminReport,
+  exportAdminReport,
+} from "../controllers/adminReportController.js";
+
 
 
 const router = Router();
@@ -110,6 +115,16 @@ router.get(
 );
 
 // router.get("/dashboard", adminDashboard);
+
+router.get(
+  "/reports",
+  getAdminReport,
+);
+
+router.get(
+  "/reports/export",
+  exportAdminReport,
+);
 
 /*
 |--------------------------------------------------------------------------

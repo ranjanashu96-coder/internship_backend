@@ -815,6 +815,11 @@ if (req.query.mentor_id) {
           req.query.semester;
       }
 
+      if (req.query.payment_status) {
+  where.payment_status =
+    req.query.payment_status;
+}
+
       if (req.query.search) {
         where[Op.or] = [
           {
