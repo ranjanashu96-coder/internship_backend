@@ -90,6 +90,8 @@ import {
   cancelBulkJob,
   retryBulkJob,
   startStudentInternship,
+  getCollegeDomainFees,
+  saveCollegeDomainFees,
 } from "../controllers/adminController.js";
 
 import {
@@ -124,6 +126,16 @@ router.get(
 router.get(
   "/reports/export",
   exportAdminReport,
+);
+
+router.get(
+  "/colleges/:collegeId/domain-fees",
+  getCollegeDomainFees,
+);
+
+router.put(
+  "/colleges/:collegeId/domain-fees",
+  saveCollegeDomainFees,
 );
 
 /*

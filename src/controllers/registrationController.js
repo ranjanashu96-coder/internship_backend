@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { Op } from "sequelize";
 import {
   Domain,
+  CollegeDomainFee,
   Payment,
   Student,
   College,
@@ -527,7 +528,55 @@ export const verifyRegistration =
   });
 
 export const listRegistrationDomains =
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const registrationNumber = String(
+      req.query.registration_number ||
+        "",
+    ).trim();
+
+    const studentId = Number(
+      req.query.student_id ||
+        req.user?.student_id ||
+        req.user?.id ||
+        0,
+    );
+
+    let student = null;
+
+    if (registrationNumber) {
+      student = await Student.findOne({
+        where: {
+          registration_number:
+            registrationNumber,
+        },
+        attributes: [
+          "id",
+          "college_id",
+        ],
+      });
+    } else if (studentId) {
+      student = await Student.findByPk(
+        studentId,
+        {
+          attributes: [
+            "id",
+            "college_id",
+          ],
+        },
+      );
+    }
+
+    if (
+      (registrationNumber ||
+        studentId) &&
+      !student
+    ) {
+      throw new AppError(
+        "Student not found",
+        404,
+      );
+    }
+
     const domains =
       await Domain.findAll({
         order: [
@@ -535,9 +584,93 @@ export const listRegistrationDomains =
         ],
       });
 
+    const collegeId =
+      student?.college_id
+        ? Number(
+            student.college_id,
+          )
+        : null;
+
+    const customFees =
+      collegeId
+        ? await CollegeDomainFee.findAll({
+            where: {
+              college_id:
+                collegeId,
+
+              status:
+                "active",
+            },
+
+            attributes: [
+              "domain_id",
+              "fee",
+            ],
+
+            raw: true,
+          })
+        : [];
+
+    const feeMap =
+      new Map(
+        customFees.map(
+          (item) => [
+            Number(
+              item.domain_id,
+            ),
+
+            Number(
+              item.fee,
+            ),
+          ],
+        ),
+      );
+
+    const items =
+      domains.map(
+        (domain) => {
+          const domainData =
+            domain.toJSON();
+
+          const customFee =
+            feeMap.get(
+              Number(
+                domain.id,
+              ),
+            );
+
+          const defaultFee =
+            Number(
+              domain.fee ||
+                0,
+            );
+
+          return {
+            ...domainData,
+
+            default_fee:
+              defaultFee,
+
+            custom_fee:
+              customFee ??
+              null,
+
+            fee:
+              customFee ??
+              defaultFee,
+
+            fee_source:
+              customFee !==
+              undefined
+                ? "college"
+                : "default",
+          };
+        },
+      );
+
     return ok(
       res,
-      domains,
+      items,
       "Registration domains retrieved",
     );
   });
@@ -1056,9 +1189,35 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
+    const collegeDomainFee =
+      await CollegeDomainFee.findOne({
+        where: {
+          college_id:
+            student.college_id,
+
+          domain_id:
+            student.domain.id,
+
+          status:
+            "active",
+        },
+
+        attributes: [
+          "fee",
+        ],
+
+        raw: true,
+      });
+
     const amount = Number(
-      student.domain.fee,
+      collegeDomainFee?.fee ??
+        student.domain.fee,
     );
+
+    const feeSource =
+      collegeDomainFee
+        ? "college"
+        : "default";
 
     if (
       !Number.isFinite(amount) ||
@@ -1170,6 +1329,9 @@ export const createPaymentOrder = asyncHandler(
     String(
       student.domain.id,
     ),
+
+  fee_source:
+    feeSource,
 },
     };
 
@@ -1234,8 +1396,25 @@ export const createPaymentOrder = asyncHandler(
             )
           : null,
       status: "created",
-      gateway_payload:
-        cashfreeOrder,
+      gateway_payload: {
+        ...cashfreeOrder,
+
+        fee_source:
+          feeSource,
+
+        default_domain_fee:
+          Number(
+            student.domain.fee ||
+              0,
+          ),
+
+        college_domain_fee:
+          collegeDomainFee
+            ? Number(
+                collegeDomainFee.fee,
+              )
+            : null,
+      },
     });
 
     return ok(

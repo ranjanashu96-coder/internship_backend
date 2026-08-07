@@ -344,6 +344,63 @@ export const Mentor = define(
 );
 export const Sector=define("Sector",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},sector_name:{type:DataTypes.STRING(150),unique:true,allowNull:false},status:{type:DataTypes.ENUM("active","inactive"),defaultValue:"active"},...common},{tableName:"sectors"});
 export const Domain=define("Domain",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},sector_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},domain_name:{type:DataTypes.STRING(150),allowNull:false},fee:{type:DataTypes.DECIMAL(10,2),defaultValue:0},duration_hours:{type:DataTypes.INTEGER.UNSIGNED,defaultValue:0},...common},{tableName:"domains"});
+
+export const CollegeDomainFee = define(
+  "CollegeDomainFee",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    college_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    domain_id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+    },
+
+    fee: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "active",
+        "inactive",
+      ),
+      allowNull: false,
+      defaultValue: "active",
+    },
+
+    ...common,
+  },
+  {
+    tableName: "college_domain_fees",
+    indexes: [
+      {
+        unique: true,
+        name: "uq_college_domain_fee",
+        fields: [
+          "college_id",
+          "domain_id",
+        ],
+      },
+      {
+        fields: ["college_id"],
+      },
+      {
+        fields: ["domain_id"],
+      },
+    ],
+  },
+);
+
 export const MentorAssignment=define("MentorAssignment",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},mentor_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},domain_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},college_id:{type:DataTypes.BIGINT.UNSIGNED,allowNull:false},session:{type:DataTypes.STRING(20),allowNull:false},semester:{type:DataTypes.STRING(20),allowNull:false},...common},{tableName:"mentor_assignments"});
 
 export const Batch = define(
@@ -1506,6 +1563,27 @@ Student.belongsTo(Domain, {
 Domain.hasMany(Student, {
   foreignKey: "domain_id",
   as: "students",
+});
+
+
+College.hasMany(CollegeDomainFee, {
+  foreignKey: "college_id",
+  as: "domain_fees",
+});
+
+CollegeDomainFee.belongsTo(College, {
+  foreignKey: "college_id",
+  as: "college",
+});
+
+Domain.hasMany(CollegeDomainFee, {
+  foreignKey: "domain_id",
+  as: "college_fees",
+});
+
+CollegeDomainFee.belongsTo(Domain, {
+  foreignKey: "domain_id",
+  as: "domain",
 });
 
 Domain.hasMany(Module, {

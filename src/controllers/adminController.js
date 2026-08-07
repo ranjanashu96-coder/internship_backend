@@ -11,6 +11,7 @@ import {
   Mentor,
   Student,
   Domain,
+  CollegeDomainFee,
   BulkJob,
   
 } from "../models/index.js";
@@ -1194,6 +1195,380 @@ export const create = (entity) =>
 
     ok(res, row, "Created", 201);
   });
+
+/*
+|--------------------------------------------------------------------------
+| College-wise Domain Fees
+|--------------------------------------------------------------------------
+*/
+
+export const getCollegeDomainFees =
+  asyncHandler(
+    async (req, res) => {
+      const collegeId =
+        Number(
+          req.params.collegeId,
+        );
+
+      if (!collegeId) {
+        throw new AppError(
+          "College is required",
+          422,
+        );
+      }
+
+      const college =
+        await College.findByPk(
+          collegeId,
+          {
+            attributes: [
+              "id",
+              "name",
+              "code",
+            ],
+          },
+        );
+
+      if (!college) {
+        throw new AppError(
+          "College not found",
+          404,
+        );
+      }
+
+      const [
+        domains,
+        customFees,
+      ] = await Promise.all([
+        Domain.findAll({
+          attributes: [
+            "id",
+            "sector_id",
+            "domain_name",
+            "fee",
+            "duration_hours",
+          ],
+
+          order: [
+            [
+              "domain_name",
+              "ASC",
+            ],
+          ],
+        }),
+
+        CollegeDomainFee.findAll({
+          where: {
+            college_id:
+              collegeId,
+          },
+
+          attributes: [
+            "id",
+            "domain_id",
+            "fee",
+            "status",
+          ],
+
+          raw: true,
+        }),
+      ]);
+
+      const feeMap =
+        new Map(
+          customFees.map(
+            (item) => [
+              Number(
+                item.domain_id,
+              ),
+              item,
+            ],
+          ),
+        );
+
+      const items =
+        domains.map(
+          (domain) => {
+            const custom =
+              feeMap.get(
+                Number(
+                  domain.id,
+                ),
+              );
+
+            const defaultFee =
+              Number(
+                domain.fee ||
+                  0,
+              );
+
+            const activeCustomFee =
+              custom?.status ===
+              "active"
+                ? Number(
+                    custom.fee,
+                  )
+                : null;
+
+            return {
+              id:
+                domain.id,
+
+              sector_id:
+                domain.sector_id,
+
+              domain_name:
+                domain.domain_name,
+
+              duration_hours:
+                domain.duration_hours,
+
+              default_fee:
+                defaultFee,
+
+              custom_fee:
+                custom
+                  ? Number(
+                      custom.fee,
+                    )
+                  : null,
+
+              effective_fee:
+                activeCustomFee ??
+                defaultFee,
+
+              fee_source:
+                activeCustomFee !==
+                null
+                  ? "college"
+                  : "default",
+
+              status:
+                custom?.status ||
+                "default",
+            };
+          },
+        );
+
+      return ok(
+        res,
+        {
+          college,
+          items,
+        },
+        "College domain fees fetched successfully",
+      );
+    },
+  );
+
+export const saveCollegeDomainFees =
+  asyncHandler(
+    async (req, res) => {
+      const collegeId =
+        Number(
+          req.params.collegeId,
+        );
+
+      if (!collegeId) {
+        throw new AppError(
+          "College is required",
+          422,
+        );
+      }
+
+      const inputRows =
+        Array.isArray(
+          req.body.fees,
+        )
+          ? req.body.fees
+          : [
+              req.body,
+            ];
+
+      if (
+        inputRows.length === 0
+      ) {
+        throw new AppError(
+          "At least one domain fee is required",
+          422,
+        );
+      }
+
+      const transaction =
+        await sequelize.transaction();
+
+      try {
+        const college =
+          await College.findByPk(
+            collegeId,
+            {
+              transaction,
+            },
+          );
+
+        if (!college) {
+          throw new AppError(
+            "College not found",
+            404,
+          );
+        }
+
+        let savedCount = 0;
+        let defaultCount = 0;
+
+        for (
+          const input of
+          inputRows
+        ) {
+          const domainId =
+            Number(
+              input.domain_id,
+            );
+
+          if (!domainId) {
+            throw new AppError(
+              "Domain is required",
+              422,
+            );
+          }
+
+          const domain =
+            await Domain.findByPk(
+              domainId,
+              {
+                transaction,
+              },
+            );
+
+          if (!domain) {
+            throw new AppError(
+              `Domain ${domainId} not found`,
+              404,
+            );
+          }
+
+          if (
+            input.use_default ===
+            true
+          ) {
+            await CollegeDomainFee.destroy({
+              where: {
+                college_id:
+                  collegeId,
+
+                domain_id:
+                  domainId,
+              },
+
+              transaction,
+            });
+
+            defaultCount += 1;
+            continue;
+          }
+
+          const fee =
+            Number(
+              input.fee,
+            );
+
+          if (
+            !Number.isFinite(
+              fee,
+            ) ||
+            fee <= 0
+          ) {
+            throw new AppError(
+              `Valid fee is required for domain ${domainId}`,
+              422,
+            );
+          }
+
+          const status =
+            input.status ===
+            "inactive"
+              ? "inactive"
+              : "active";
+
+          const existing =
+            await CollegeDomainFee.findOne({
+              where: {
+                college_id:
+                  collegeId,
+
+                domain_id:
+                  domainId,
+              },
+
+              transaction,
+            });
+
+          if (existing) {
+            await existing.update(
+              {
+                fee,
+                status,
+                updated_at:
+                  new Date(),
+              },
+              {
+                transaction,
+              },
+            );
+          } else {
+            await CollegeDomainFee.create(
+              {
+                college_id:
+                  collegeId,
+
+                domain_id:
+                  domainId,
+
+                fee,
+                status,
+
+                created_at:
+                  new Date(),
+
+                updated_at:
+                  new Date(),
+              },
+              {
+                transaction,
+              },
+            );
+          }
+
+          savedCount += 1;
+        }
+
+        await transaction.commit();
+
+        return ok(
+          res,
+          {
+            college_id:
+              collegeId,
+
+            saved_count:
+              savedCount,
+
+            reset_to_default_count:
+              defaultCount,
+          },
+          "College domain fees saved successfully",
+        );
+      } catch (error) {
+        if (
+          !transaction.finished
+        ) {
+          await transaction.rollback();
+        }
+
+        throw error;
+      }
+    },
+  );
 
 /**
  * Dedicated College creation
@@ -2680,35 +3055,62 @@ export const startStudentInternship =
           new Date(),
         );
 
-      await student.update({
-        internship_start_date:
-          startDate,
+     const internshipStarted =
+  startDate <= today;
 
-          
+await student.update({
+  internship_start_date:
+    startDate,
 
-        internship_status:
-          startDate <= today
-            ? "active"
-            : "registered",
-      });
+  /*
+   * Payment complete hone ke baad
+   * student active hi rahega.
+   *
+   * Future internship date dene par
+   * active -> registered nahi hoga.
+   */
+  internship_status:
+    "active",
 
-      const formattedStartDate =
+  /*
+   * Learning aur attendance
+   * isi date se start honge.
+   */
+  learning_start_date:
+    startDate,
+
+  attendance_start_date:
+    startDate,
+
+  /*
+   * Today/past date hai:
+   * immediately unlock.
+   *
+   * Future date hai:
+   * abhi locked.
+   */
+  learning_access_enabled:
+    internshipStarted,
+
+  attendance_access_enabled:
+    internshipStarted,
+});
+
+const formattedStartDate =
   new Intl.DateTimeFormat(
     "en-IN",
     {
       day: "2-digit",
       month: "long",
       year: "numeric",
-      timeZone: "Asia/Kolkata",
+      timeZone:
+        "Asia/Kolkata",
     },
   ).format(
     new Date(
       `${startDate}T00:00:00+05:30`,
     ),
   );
-
-const internshipStarted =
-  startDate <= today;
 
 try {
   await notify({
