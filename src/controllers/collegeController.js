@@ -8,6 +8,7 @@ import {
   Student,
   Certificate,
   Domain,
+  Payment,
 } from "../models/index.js";
 
 import {
@@ -195,6 +196,74 @@ export const dashboard =
             Number(student.id),
         );
 
+      /*
+       * Revenue must come from the actual successful
+       * payment snapshot, never from the current Domain.fee.
+       *
+       * This keeps old revenue correct even if a college/domain
+       * fee is changed later.
+       */
+      const successfulPayments =
+        studentIds.length > 0
+          ? await Payment.findAll({
+              where: {
+                student_id: {
+                  [Op.in]:
+                    studentIds,
+                },
+
+                status: "success",
+              },
+
+              attributes: [
+                "id",
+                "student_id",
+                "amount",
+                "paid_at",
+                "created_at",
+              ],
+
+              raw: true,
+            })
+          : [];
+
+      const paymentAmountByStudentId =
+        new Map();
+
+      for (
+        const payment of
+        successfulPayments
+      ) {
+        const paymentStudentId =
+          Number(
+            payment.student_id,
+          );
+
+        const paymentAmount =
+          toNumber(
+            payment.amount,
+          );
+
+        paymentAmountByStudentId.set(
+          paymentStudentId,
+          (
+            paymentAmountByStudentId.get(
+              paymentStudentId,
+            ) || 0
+          ) + paymentAmount,
+        );
+      }
+
+      const paidRevenue =
+        successfulPayments.reduce(
+          (total, payment) =>
+            total +
+            toNumber(
+              payment.amount,
+            ),
+          0,
+        );
+
       const certificateCount =
         studentIds.length > 0
           ? await Certificate.count({
@@ -232,7 +301,6 @@ export const dashboard =
       let unassignedStudents = 0;
 
       let totalProgress = 0;
-      let paidRevenue = 0;
 
       const domainMap =
         new Map();
@@ -339,21 +407,19 @@ export const dashboard =
         }
 
         /*
-         * Revenue is calculated from
-         * domain fee for paid students.
+         * Actual revenue paid by this student.
+         *
+         * Source: payments.amount where payments.status = success.
+         * It intentionally does NOT use student.domain.fee because
+         * that fee can change after the payment was completed.
          */
-        if (
-          student.payment_status ===
-          "paid"
-        ) {
-          paidRevenue +=
-            toNumber(
-              student.domain?.fee,
-            );
-        }
+        const studentPaidAmount =
+          paymentAmountByStudentId.get(
+            Number(student.id),
+          ) || 0;
 
         /*
-         * Domain distribution.
+         * Domain distribution + actual domain-wise revenue.
          */
         const domainId =
           student.domain?.id ??
@@ -373,6 +439,14 @@ export const dashboard =
         if (existingDomain) {
           existingDomain.student_count +=
             1;
+
+          if (studentPaidAmount > 0) {
+            existingDomain.paid_students +=
+              1;
+          }
+
+          existingDomain.gross_revenue +=
+            studentPaidAmount;
         } else {
           domainMap.set(
             Number(domainId),
@@ -385,6 +459,14 @@ export const dashboard =
 
               student_count:
                 1,
+
+              paid_students:
+                studentPaidAmount > 0
+                  ? 1
+                  : 0,
+
+              gross_revenue:
+                studentPaidAmount,
             },
           );
         }
@@ -558,14 +640,244 @@ export const dashboard =
         }
       }
 
+      const collegeShareRate =
+        toNumber(
+          college.college_share,
+        );
+
+      const rknexoraShareRate =
+        toNumber(
+          college.rknexora_share,
+        );
+
+      /*
+       * Keep the old domain_distribution shape compatible
+       * for the existing dashboard widgets.
+       */
       const domainDistribution =
         Array.from(
           domainMap.values(),
-        ).sort(
-          (first, second) =>
-            second.student_count -
-            first.student_count,
+        )
+          .map((domain) => ({
+            domain_id:
+              domain.domain_id,
+
+            domain_name:
+              domain.domain_name,
+
+            student_count:
+              domain.student_count,
+          }))
+          .sort(
+            (first, second) =>
+              second.student_count -
+              first.student_count,
+          );
+
+      /*
+       * Actual domain-wise revenue.
+       * Revenue source is successful Payment.amount snapshots.
+       */
+      const domainRevenueDistribution =
+        Array.from(
+          domainMap.values(),
+        )
+          .map((domain) => {
+            const grossRevenue =
+              toNumber(
+                domain.gross_revenue,
+              );
+
+            return {
+              domain_id:
+                domain.domain_id,
+
+              domain_name:
+                domain.domain_name,
+
+              student_count:
+                domain.student_count,
+
+              paid_students:
+                domain.paid_students,
+
+              gross_revenue:
+                Number(
+                  grossRevenue.toFixed(
+                    2,
+                  ),
+                ),
+
+              college_share_amount:
+                Number(
+                  (
+                    grossRevenue *
+                    (
+                      collegeShareRate /
+                      100
+                    )
+                  ).toFixed(2),
+                ),
+
+              rknexora_share_amount:
+                Number(
+                  (
+                    grossRevenue *
+                    (
+                      rknexoraShareRate /
+                      100
+                    )
+                  ).toFixed(2),
+                ),
+            };
+          })
+          .sort(
+            (first, second) =>
+              second.gross_revenue -
+              first.gross_revenue,
+          );
+
+      /*
+       * Last 12 months actual payment revenue.
+       */
+      const revenueMonthMap =
+        new Map();
+
+      const monthlyRevenue =
+        Array.from(
+          { length: 12 },
+          (_, index) => {
+            const date =
+              new Date(
+                currentDate.getFullYear(),
+                currentDate.getMonth() -
+                  11 +
+                  index,
+                1,
+              );
+
+            const key =
+              getMonthKey(date);
+
+            const item = {
+              key,
+
+              month:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month: "short",
+                  },
+                ),
+
+              year:
+                date.getFullYear(),
+
+              label:
+                date.toLocaleString(
+                  "en-US",
+                  {
+                    month: "short",
+                    year: "numeric",
+                  },
+                ),
+
+              successful_payments: 0,
+              gross_revenue: 0,
+              college_share_amount: 0,
+              rknexora_share_amount: 0,
+            };
+
+            revenueMonthMap.set(
+              key,
+              item,
+            );
+
+            return item;
+          },
         );
+
+      for (
+        const payment of
+        successfulPayments
+      ) {
+        const paymentDateValue =
+          payment.paid_at ||
+          payment.created_at;
+
+        if (!paymentDateValue) {
+          continue;
+        }
+
+        const paymentDate =
+          new Date(
+            paymentDateValue,
+          );
+
+        if (
+          Number.isNaN(
+            paymentDate.getTime(),
+          )
+        ) {
+          continue;
+        }
+
+        const month =
+          revenueMonthMap.get(
+            getMonthKey(
+              paymentDate,
+            ),
+          );
+
+        if (!month) {
+          continue;
+        }
+
+        const amount =
+          toNumber(
+            payment.amount,
+          );
+
+        month.successful_payments +=
+          1;
+
+        month.gross_revenue +=
+          amount;
+
+        month.college_share_amount +=
+          amount *
+          (collegeShareRate / 100);
+
+        month.rknexora_share_amount +=
+          amount *
+          (rknexoraShareRate / 100);
+      }
+
+      for (
+        const month of
+        monthlyRevenue
+      ) {
+        month.gross_revenue =
+          Number(
+            month.gross_revenue.toFixed(
+              2,
+            ),
+          );
+
+        month.college_share_amount =
+          Number(
+            month.college_share_amount.toFixed(
+              2,
+            ),
+          );
+
+        month.rknexora_share_amount =
+          Number(
+            month.rknexora_share_amount.toFixed(
+              2,
+            ),
+          );
+      }
 
       const sessionDistribution =
         Array.from(
@@ -774,6 +1086,10 @@ export const dashboard =
             certificate_rate:
               certificateRate,
 
+            /*
+             * Backward compatible field. It is now actual revenue
+             * from successful payments, not an estimate from Domain.fee.
+             */
             estimated_revenue:
               Number(
                 paidRevenue.toFixed(
@@ -781,14 +1097,32 @@ export const dashboard =
                 ),
               ),
 
+            gross_revenue:
+              Number(
+                paidRevenue.toFixed(
+                  2,
+                ),
+              ),
+
+            successful_payments:
+              successfulPayments.length,
+
+            revenue_source:
+              "payments_success_amount",
+
+            college_share_percentage:
+              collegeShareRate,
+
+            rknexora_share_percentage:
+              rknexoraShareRate,
+
             college_share_amount:
               Number(
                 (
                   paidRevenue *
                   (
-                    toNumber(
-                      college.college_share,
-                    ) / 100
+                    collegeShareRate /
+                    100
                   )
                 ).toFixed(2),
               ),
@@ -798,9 +1132,8 @@ export const dashboard =
                 (
                   paidRevenue *
                   (
-                    toNumber(
-                      college.rknexora_share,
-                    ) / 100
+                    rknexoraShareRate /
+                    100
                   )
                 ).toFixed(2),
               ),
@@ -818,8 +1151,14 @@ export const dashboard =
           monthly_registrations:
             monthlyRegistrations,
 
+          monthly_revenue:
+            monthlyRevenue,
+
           domain_distribution:
             domainDistribution,
+
+          domain_revenue_distribution:
+            domainRevenueDistribution,
 
           session_distribution:
             sessionDistribution,
