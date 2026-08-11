@@ -117,6 +117,11 @@ router.post(
   c.cashfreeWebhook,
 );
 
+router.post(
+  "/payment/razorpay/webhook",
+  c.razorpayWebhook,
+);
+
 router.get(
   "/payment/receipt/:transaction_id",
   [

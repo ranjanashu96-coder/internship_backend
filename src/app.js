@@ -91,17 +91,21 @@ app.use(
 */
 
 app.use(
-  express.json({
-    limit: "2mb",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
 
-    verify: (req, _res, buffer) => {
-      if (
+    skip: (req) => {
+      return (
         req.originalUrl.startsWith(
           "/api/registration/payment/cashfree/webhook",
+        ) ||
+        req.originalUrl.startsWith(
+          "/api/registration/payment/razorpay/webhook",
         )
-      ) {
-        req.rawBody = Buffer.from(buffer);
-      }
+      );
     },
   }),
 );

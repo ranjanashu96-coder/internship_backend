@@ -2509,6 +2509,554 @@ export const verifyPayment =
     );
   };
 
+  export const razorpayWebhook =
+  asyncHandler(async (req, res) => {
+    const signature = String(
+      req.headers[
+        "x-razorpay-signature"
+      ] || "",
+    ).trim();
+
+    const eventId = String(
+      req.headers[
+        "x-razorpay-event-id"
+      ] || "",
+    ).trim();
+
+    const webhookSecret =
+      String(
+        process.env
+          .RAZORPAY_WEBHOOK_SECRET ||
+          "",
+      ).trim();
+
+    if (!webhookSecret) {
+      throw new AppError(
+        "Razorpay webhook secret is not configured",
+        500,
+      );
+    }
+
+    if (
+      !signature ||
+      !req.rawBody
+    ) {
+      throw new AppError(
+        "Invalid Razorpay webhook request",
+        401,
+      );
+    }
+
+    const rawBody =
+      Buffer.isBuffer(
+        req.rawBody,
+      )
+        ? req.rawBody.toString(
+            "utf8",
+          )
+        : String(
+            req.rawBody,
+          );
+
+    const expectedSignature =
+      crypto
+        .createHmac(
+          "sha256",
+          webhookSecret,
+        )
+        .update(rawBody)
+        .digest("hex");
+
+    if (
+      !safeSignatureCompare(
+        expectedSignature,
+        signature,
+      )
+    ) {
+      throw new AppError(
+        "Invalid Razorpay webhook signature",
+        401,
+      );
+    }
+
+    const event = String(
+      req.body?.event || "",
+    ).trim();
+
+    /*
+     * Abhi sirf in events ko
+     * process karna hai.
+     */
+    if (
+      ![
+        "payment.captured",
+        "payment.failed",
+      ].includes(event)
+    ) {
+      return res
+        .status(200)
+        .json({
+          success: true,
+          message:
+            "Razorpay webhook acknowledged",
+        });
+    }
+
+    const razorpayPayment =
+      req.body?.payload
+        ?.payment?.entity;
+
+    if (!razorpayPayment) {
+      throw new AppError(
+        "Razorpay payment payload is missing",
+        422,
+      );
+    }
+
+    const razorpayPaymentId =
+      String(
+        razorpayPayment.id ||
+          "",
+      ).trim();
+
+    const razorpayOrderId =
+      String(
+        razorpayPayment
+          .order_id ||
+          "",
+      ).trim();
+
+    if (
+      !razorpayPaymentId ||
+      !razorpayOrderId
+    ) {
+      throw new AppError(
+        "Razorpay payment ID or order ID is missing",
+        422,
+      );
+    }
+
+    const transaction =
+      await Payment.sequelize
+        .transaction();
+
+    try {
+      const payment =
+        await Payment.findOne({
+          where: {
+            [Op.or]: [
+              {
+                razorpay_order_id:
+                  razorpayOrderId,
+              },
+
+              {
+                order_id:
+                  razorpayOrderId,
+              },
+
+              {
+                razorpay_payment_id:
+                  razorpayPaymentId,
+              },
+            ],
+          },
+
+          transaction,
+
+          lock:
+            transaction.LOCK.UPDATE,
+        });
+
+      /*
+       * Non-2xx response dene par
+       * Razorpay retry karega.
+       */
+      if (!payment) {
+        throw new AppError(
+          "Razorpay payment record not found",
+          404,
+        );
+      }
+
+      if (
+        String(
+          payment.gateway || "",
+        ).toLowerCase() !==
+        "razorpay"
+      ) {
+        throw new AppError(
+          "Payment gateway mismatch",
+          409,
+        );
+      }
+
+      const oldPayload =
+        parseJsonObject(
+          payment.gateway_payload,
+        );
+
+      const processedEventIds =
+        Array.isArray(
+          oldPayload
+            .razorpay_webhook_event_ids,
+        )
+          ? oldPayload
+              .razorpay_webhook_event_ids
+          : [];
+
+      /*
+       * Same webhook dobara aaye
+       * to duplicate processing nahi.
+       */
+      if (
+        eventId &&
+        processedEventIds.includes(
+          eventId,
+        )
+      ) {
+        await transaction.commit();
+
+        return res
+          .status(200)
+          .json({
+            success: true,
+            message:
+              "Razorpay webhook already processed",
+          });
+      }
+
+      const updatedEventIds =
+        eventId
+          ? [
+              ...processedEventIds,
+              eventId,
+            ].slice(-50)
+          : processedEventIds;
+
+      /*
+       * --------------------------------
+       * PAYMENT FAILED
+       * --------------------------------
+       */
+      if (
+        event ===
+        "payment.failed"
+      ) {
+        /*
+         * Kabhi failed event ke baad
+         * captured event aa sakta hai.
+         *
+         * Already-successful payment ko
+         * failed me downgrade nahi karna.
+         */
+        if (
+          ![
+            "success",
+            "paid",
+          ].includes(
+            payment.status,
+          )
+        ) {
+          await payment.update(
+            {
+              status: "failed",
+
+              order_id:
+                razorpayOrderId,
+
+              razorpay_order_id:
+                razorpayOrderId,
+
+              razorpay_payment_id:
+                razorpayPaymentId,
+
+              payment_method:
+                razorpayPayment
+                  .method ||
+                null,
+
+              payment_message:
+                razorpayPayment
+                  .error_description ||
+                razorpayPayment
+                  .error_reason ||
+                "Razorpay payment failed",
+
+              failure_reason:
+                razorpayPayment
+                  .error_description ||
+                razorpayPayment
+                  .error_reason ||
+                razorpayPayment
+                  .error_code ||
+                "Payment failed",
+
+              gateway_payload: {
+                ...oldPayload,
+
+                razorpay_payment:
+                  razorpayPayment,
+
+                razorpay_webhook_event:
+                  event,
+
+                razorpay_webhook_event_ids:
+                  updatedEventIds,
+
+                razorpay_webhook_received_at:
+                  new Date()
+                    .toISOString(),
+              },
+            },
+            {
+              transaction,
+            },
+          );
+        }
+
+        await transaction.commit();
+
+        return res
+          .status(200)
+          .json({
+            success: true,
+            message:
+              "Razorpay failed payment webhook processed",
+          });
+      }
+
+      /*
+       * --------------------------------
+       * PAYMENT CAPTURED
+       * --------------------------------
+       */
+
+      const expectedAmountPaise =
+        Math.round(
+          Number(
+            payment.amount,
+          ) * 100,
+        );
+
+      const receivedAmountPaise =
+        Number(
+          razorpayPayment.amount,
+        );
+
+      const receivedCurrency =
+        String(
+          razorpayPayment
+            .currency ||
+            "",
+        ).toUpperCase();
+
+      if (
+        razorpayPayment
+          .order_id !==
+          razorpayOrderId ||
+        razorpayPayment.status !==
+          "captured" ||
+        !Number.isFinite(
+          receivedAmountPaise,
+        ) ||
+        receivedAmountPaise !==
+          expectedAmountPaise ||
+        receivedCurrency !==
+          "INR"
+      ) {
+        throw new AppError(
+          "Razorpay webhook payment validation failed",
+          409,
+        );
+      }
+
+      const student =
+        await Student.findByPk(
+          payment.student_id,
+          {
+            transaction,
+
+            lock:
+              transaction.LOCK.UPDATE,
+          },
+        );
+
+      if (!student) {
+        throw new AppError(
+          "Student record not found",
+          404,
+        );
+      }
+
+      const portalRegistrationNumber =
+        student
+          .portal_registration_number ||
+        createPortalRegistrationNumber(
+          student,
+        );
+
+      await payment.update(
+        {
+          gateway:
+            "razorpay",
+
+          status:
+            "success",
+
+          order_id:
+            razorpayOrderId,
+
+          razorpay_order_id:
+            razorpayOrderId,
+
+          razorpay_payment_id:
+            razorpayPaymentId,
+
+          amount:
+            Number(
+              (
+                receivedAmountPaise /
+                100
+              ).toFixed(2),
+            ),
+
+          currency:
+            receivedCurrency,
+
+          payment_method:
+            razorpayPayment.method ||
+            null,
+
+          payment_message:
+            "Payment captured successfully",
+
+          failure_reason:
+            null,
+
+          paid_at:
+            razorpayPayment
+              .created_at
+              ? new Date(
+                  Number(
+                    razorpayPayment
+                      .created_at,
+                  ) * 1000,
+                )
+              : new Date(),
+
+          gateway_payload: {
+            ...oldPayload,
+
+            razorpay_payment:
+              razorpayPayment,
+
+            razorpay_webhook_event:
+              event,
+
+            razorpay_webhook_event_ids:
+              updatedEventIds,
+
+            razorpay_webhook_received_at:
+              new Date()
+                .toISOString(),
+          },
+        },
+        {
+          transaction,
+        },
+      );
+
+      await student.update(
+        {
+          payment_status:
+            "paid",
+
+          internship_status:
+            "active",
+
+          registration_locked:
+            true,
+
+          portal_registration_number:
+            portalRegistrationNumber,
+        },
+        {
+          transaction,
+        },
+      );
+
+      await transaction.commit();
+
+      /*
+       * Receipt/email response ke baad
+       * background me process honge.
+       */
+      void (async () => {
+        try {
+          await ensurePaymentReceipt(
+            payment.id,
+          );
+
+          await queuePaymentSuccessNotification(
+            payment.id,
+          );
+        } catch (error) {
+          console.error(
+            "RAZORPAY WEBHOOK POST PROCESS ERROR:",
+            error,
+          );
+        }
+      })();
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          data: {
+            gateway:
+              "razorpay",
+
+            order_id:
+              razorpayOrderId,
+
+            razorpay_order_id:
+              razorpayOrderId,
+
+            razorpay_payment_id:
+              razorpayPaymentId,
+
+            transaction_id:
+              payment
+                .transaction_id,
+
+            payment_status:
+              "paid",
+
+            internship_status:
+              "active",
+          },
+
+          message:
+            "Razorpay captured payment webhook processed successfully",
+        });
+    } catch (error) {
+      if (
+        !transaction.finished
+      ) {
+        await transaction.rollback();
+      }
+
+      console.error(
+        "RAZORPAY WEBHOOK ERROR:",
+        error,
+      );
+
+      throw error;
+    }
+  });
+
 
 export const verifyCashfreePayment = async (
   req,
