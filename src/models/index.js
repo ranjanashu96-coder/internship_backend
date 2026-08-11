@@ -1038,6 +1038,29 @@ export const Payment = define(
       defaultValue: "cashfree",
     },
 
+    // Generic order id
+    order_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    // Razorpay
+    razorpay_order_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    razorpay_payment_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    razorpay_signature: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    // Cashfree
     cashfree_order_id: {
       type: DataTypes.STRING(100),
       unique: true,
@@ -1060,14 +1083,26 @@ export const Payment = define(
         "pending",
         "processing",
         "success",
+        "paid",
         "failed",
         "refunded",
       ),
+      allowNull: false,
       defaultValue: "created",
     },
 
-    failure_reason: {
+    payment_method: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+
+    payment_message: {
       type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    failure_reason: {
+      type: DataTypes.TEXT,
       allowNull: true,
     },
 
@@ -1080,28 +1115,46 @@ export const Payment = define(
       type: DataTypes.JSON,
       allowNull: true,
     },
+
     receipt_path: {
-  type: DataTypes.STRING(500),
-  allowNull: true,
-},
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
 
-receipt_generated_at: {
-  type: DataTypes.DATE,
-  allowNull: true,
-},
+    receipt_generated_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
 
-receipt_number: {
-  type: DataTypes.STRING(100),
-  allowNull: true,
-  unique: true,
-},
+    receipt_number: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      unique: true,
+    },
 
     ...common,
   },
   {
     tableName: "payments",
+
+    indexes: [
+      {
+        fields: ["student_id"],
+      },
+      {
+        fields: ["gateway", "status"],
+      },
+      {
+        fields: ["razorpay_order_id"],
+      },
+      {
+        fields: ["razorpay_payment_id"],
+      },
+    ],
   },
-);export const AuditLog=define("AuditLog",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},user_id:DataTypes.BIGINT.UNSIGNED,action:{type:DataTypes.STRING(100),allowNull:false},entity_type:{type:DataTypes.STRING(100),allowNull:false},entity_id:DataTypes.BIGINT.UNSIGNED,details:DataTypes.JSON,timestamp:{type:DataTypes.DATE,defaultValue:DataTypes.NOW}},{tableName:"audit_logs"});
+);
+
+;export const AuditLog=define("AuditLog",{id:{type:DataTypes.BIGINT.UNSIGNED,primaryKey:true,autoIncrement:true},user_id:DataTypes.BIGINT.UNSIGNED,action:{type:DataTypes.STRING(100),allowNull:false},entity_type:{type:DataTypes.STRING(100),allowNull:false},entity_id:DataTypes.BIGINT.UNSIGNED,details:DataTypes.JSON,timestamp:{type:DataTypes.DATE,defaultValue:DataTypes.NOW}},{tableName:"audit_logs"});
 export const ChapterCompletion = define(
   "ChapterCompletion",
   {

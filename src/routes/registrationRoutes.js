@@ -94,16 +94,21 @@ router.post(
   c.createPaymentOrder,
 );
 
+// router.post(
+//   "/payment/verify",
+//   [
+//     body("order_id")
+//       .trim()
+//       .notEmpty()
+//       .withMessage("Cashfree order ID is required"),
+//   ],
+//   validate,
+//   c.verifyCashfreePayment,
+// );
+
 router.post(
   "/payment/verify",
-  [
-    body("order_id")
-      .trim()
-      .notEmpty()
-      .withMessage("Cashfree order ID is required"),
-  ],
-  validate,
-  c.verifyCashfreePayment,
+  c.verifyPayment,
 );
 
 // Public endpoint; authenticity is verified using Cashfree HMAC signature.

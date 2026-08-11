@@ -57,6 +57,73 @@ const createCashfreeOrderId = (
   return `RKN_${studentId}_${Date.now()}_${randomValue}`;
 };
 
+
+const getActivePaymentGateway = () => {
+  const gateway = String(
+    process.env.PAYMENT_GATEWAY ||
+      "cashfree",
+  )
+    .trim()
+    .toLowerCase();
+
+  if (
+    ![
+      "cashfree",
+      "razorpay",
+    ].includes(gateway)
+  ) {
+    throw new AppError(
+      `Unsupported payment gateway: ${gateway}`,
+      500,
+    );
+  }
+
+  return gateway;
+};
+
+const getRazorpayCredentials = () => {
+  const keyId = String(
+    process.env.RAZORPAY_KEY_ID ||
+      "",
+  ).trim();
+
+  const keySecret = String(
+    process.env
+      .RAZORPAY_KEY_SECRET ||
+      "",
+  ).trim();
+
+  if (!keyId || !keySecret) {
+    throw new AppError(
+      "Razorpay credentials are not configured",
+      500,
+    );
+  }
+
+  return {
+    keyId,
+    keySecret,
+  };
+};
+
+const getRazorpayAuth = () => {
+  const {
+    keyId,
+    keySecret,
+  } =
+    getRazorpayCredentials();
+
+  return {
+    username: keyId,
+    password: keySecret,
+  };
+};
+
+const createRazorpayReceiptId = (
+  studentId,
+) =>
+  `RKN_${studentId}_${Date.now()}`;
+
 const createPortalRegistrationNumber = (
   student,
 ) => {
@@ -230,8 +297,28 @@ const queuePaymentSuccessNotification =
           transaction_id:
             payment.transaction_id,
 
+          gateway:
+            payment.gateway ||
+            "cashfree",
+
+          order_id:
+            payment.razorpay_order_id ||
+            payment.cashfree_order_id ||
+            payment.order_id ||
+            null,
+
+          payment_id:
+            payment.razorpay_payment_id ||
+            payment.cf_payment_id ||
+            null,
+
           cashfree_order_id:
-            payment.cashfree_order_id,
+            payment.cashfree_order_id ||
+            null,
+
+          razorpay_order_id:
+            payment.razorpay_order_id ||
+            null,
 
           amount,
 
@@ -1132,22 +1219,23 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
-    const student = await Student.findByPk(
-      studentId,
-      {
-        include: [
-          {
-            model: Domain,
-            as: "domain",
-            attributes: [
-              "id",
-              "domain_name",
-              "fee",
-            ],
-          },
-        ],
-      },
-    );
+    const student =
+      await Student.findByPk(
+        studentId,
+        {
+          include: [
+            {
+              model: Domain,
+              as: "domain",
+              attributes: [
+                "id",
+                "domain_name",
+                "fee",
+              ],
+            },
+          ],
+        },
+      );
 
     if (!student) {
       throw new AppError(
@@ -1166,7 +1254,9 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
-    if (!student.registration_locked) {
+    if (
+      !student.registration_locked
+    ) {
       throw new AppError(
         "Confirm and lock registration before payment",
         409,
@@ -1174,7 +1264,8 @@ export const createPaymentOrder = asyncHandler(
     }
 
     if (
-      student.payment_status === "paid"
+      student.payment_status ===
+      "paid"
     ) {
       throw new AppError(
         "Payment has already been completed",
@@ -1189,6 +1280,12 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
+    /*
+     * IMPORTANT:
+     * Amount is always resolved on the server.
+     * Active college-specific fee wins; otherwise
+     * the global domain fee is used.
+     */
     const collegeDomainFee =
       await CollegeDomainFee.findOne({
         where: {
@@ -1241,11 +1338,12 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
-    const customerEmail = String(
-      student.email || "",
-    )
-      .trim()
-      .toLowerCase();
+    const customerEmail =
+      String(
+        student.email || "",
+      )
+        .trim()
+        .toLowerCase();
 
     if (!customerEmail) {
       throw new AppError(
@@ -1254,13 +1352,254 @@ export const createPaymentOrder = asyncHandler(
       );
     }
 
+    const portalRegistrationNumber =
+      student
+        .portal_registration_number ||
+      createPortalRegistrationNumber(
+        student,
+      );
+
+    const gateway =
+      getActivePaymentGateway();
+
+    /*
+     * -------------------------------------------------
+     * RAZORPAY
+     * -------------------------------------------------
+     */
+    if (gateway === "razorpay") {
+      const {
+        keyId,
+      } =
+        getRazorpayCredentials();
+
+      const amountInPaise =
+        Math.round(
+          amount * 100,
+        );
+
+      const receipt =
+        createRazorpayReceiptId(
+          student.id,
+        );
+
+      let razorpayOrder;
+
+      try {
+        const response =
+          await axios.post(
+            "https://api.razorpay.com/v1/orders",
+            {
+              amount:
+                amountInPaise,
+
+              currency:
+                "INR",
+
+              receipt,
+
+              notes: {
+                student_id:
+                  String(
+                    student.id,
+                  ),
+
+                registration_number:
+                  String(
+                    student
+                      .registration_number ||
+                      "",
+                  ),
+
+                portal_registration_number:
+                  String(
+                    portalRegistrationNumber ||
+                      "",
+                  ),
+
+                domain_id:
+                  String(
+                    student.domain.id,
+                  ),
+
+                fee_source:
+                  feeSource,
+              },
+            },
+            {
+              auth:
+                getRazorpayAuth(),
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout:
+                20000,
+            },
+          );
+
+        razorpayOrder =
+          response.data;
+      } catch (error) {
+        console.error(
+          "Razorpay order error:",
+          error.response?.data ||
+            error.message,
+        );
+
+        throw new AppError(
+          error.response?.data
+            ?.error?.description ||
+            error.response?.data
+              ?.message ||
+            "Unable to create Razorpay payment order",
+          error.response?.status ||
+            500,
+        );
+      }
+
+      if (
+        !razorpayOrder?.id
+      ) {
+        throw new AppError(
+          "Razorpay order ID was not generated",
+          500,
+        );
+      }
+
+      const transactionId =
+        `RZP_${student.id}_${Date.now()}`;
+
+      await Payment.create({
+        student_id:
+          student.id,
+
+        amount,
+
+        currency:
+          "INR",
+
+        transaction_id:
+          transactionId,
+
+        gateway:
+          "razorpay",
+
+        order_id:
+          razorpayOrder.id,
+
+        razorpay_order_id:
+          razorpayOrder.id,
+
+        status:
+          "created",
+
+        gateway_payload: {
+          razorpay_order:
+            razorpayOrder,
+
+          fee_source:
+            feeSource,
+
+          default_domain_fee:
+            Number(
+              student.domain.fee ||
+                0,
+            ),
+
+          college_domain_fee:
+            collegeDomainFee
+              ? Number(
+                  collegeDomainFee
+                    .fee,
+                )
+              : null,
+        },
+      });
+
+      return ok(
+        res,
+        {
+          gateway:
+            "razorpay",
+
+          key_id:
+            keyId,
+
+          order_id:
+            razorpayOrder.id,
+
+          razorpay_order_id:
+            razorpayOrder.id,
+
+          /*
+           * Razorpay Checkout expects the
+           * amount in currency subunits (paise).
+           */
+          amount:
+            amountInPaise,
+
+          amount_rupees:
+            amount,
+
+          currency:
+            "INR",
+
+          transaction_id:
+            transactionId,
+
+          student: {
+            id:
+              student.id,
+
+            name:
+              student.name,
+
+            email:
+              student.email,
+
+            mobile:
+              customerPhone,
+
+            registration_number:
+              student
+                .registration_number,
+
+            portal_registration_number:
+              portalRegistrationNumber,
+          },
+
+          domain: {
+            id:
+              student.domain.id,
+
+            domain_name:
+              student.domain
+                .domain_name,
+          },
+        },
+        "Razorpay payment order created successfully",
+        201,
+      );
+    }
+
+    /*
+     * -------------------------------------------------
+     * CASHFREE
+     * -------------------------------------------------
+     */
     const frontendUrl =
       process.env.CLIENT_URL;
 
     const backendUrl =
       process.env.BACKEND_URL;
 
-    if (!frontendUrl || !backendUrl) {
+    if (
+      !frontendUrl ||
+      !backendUrl
+    ) {
       throw new AppError(
         "CLIENT_URL or BACKEND_URL is not configured",
         500,
@@ -1272,25 +1611,25 @@ export const createPaymentOrder = asyncHandler(
         student.id,
       );
 
-      const portalRegistrationNumber =
-  student.portal_registration_number ||
-  createPortalRegistrationNumber(
-    student,
-  );
-
     const payload = {
-      order_id: orderId,
-      order_amount: Number(
-        amount.toFixed(2),
-      ),
-      order_currency: "INR",
+      order_id:
+        orderId,
+
+      order_amount:
+        Number(
+          amount.toFixed(2),
+        ),
+
+      order_currency:
+        "INR",
 
       customer_details: {
         customer_id:
           `STUDENT_${student.id}`,
 
         customer_name:
-          student.name || "Student",
+          student.name ||
+          "Student",
 
         customer_email:
           customerEmail,
@@ -1312,27 +1651,30 @@ export const createPaymentOrder = asyncHandler(
       order_note:
         `Internship payment for ${student.domain.domain_name}`,
 
-     order_tags: {
-  student_id:
-    String(student.id),
+      order_tags: {
+        student_id:
+          String(
+            student.id,
+          ),
 
-  registration_number:
-    String(
-      student.registration_number ||
-        "",
-    ),
+        registration_number:
+          String(
+            student
+              .registration_number ||
+              "",
+          ),
 
-  portal_registration_number:
-    portalRegistrationNumber,
+        portal_registration_number:
+          portalRegistrationNumber,
 
-  domain_id:
-    String(
-      student.domain.id,
-    ),
+        domain_id:
+          String(
+            student.domain.id,
+          ),
 
-  fee_source:
-    feeSource,
-},
+        fee_source:
+          feeSource,
+      },
     };
 
     let cashfreeOrder;
@@ -1343,16 +1685,22 @@ export const createPaymentOrder = asyncHandler(
           `${getCashfreeBaseUrl()}/orders`,
           payload,
           {
-            headers: getCashfreeHeaders({
-              "x-idempotency-key": crypto.randomUUID(),
-              "x-request-id": crypto.randomUUID(),
-            }),
+            headers:
+              getCashfreeHeaders({
+                "x-idempotency-key":
+                  crypto.randomUUID(),
 
-            timeout: 20000,
+                "x-request-id":
+                  crypto.randomUUID(),
+              }),
+
+            timeout:
+              20000,
           },
         );
 
-      cashfreeOrder = response.data;
+      cashfreeOrder =
+        response.data;
     } catch (error) {
       console.error(
         "Cashfree order error:",
@@ -1361,9 +1709,11 @@ export const createPaymentOrder = asyncHandler(
       );
 
       throw new AppError(
-        error.response?.data?.message ||
+        error.response?.data
+          ?.message ||
           "Unable to create payment order",
-        error.response?.status || 500,
+        error.response?.status ||
+          500,
       );
     }
 
@@ -1381,21 +1731,37 @@ export const createPaymentOrder = asyncHandler(
       `CF_${student.id}_${Date.now()}`;
 
     await Payment.create({
-      student_id: student.id,
+      student_id:
+        student.id,
+
       amount,
-      currency: "INR",
+
+      currency:
+        "INR",
+
       transaction_id:
         transactionId,
-      gateway: "cashfree",
+
+      gateway:
+        "cashfree",
+
+      order_id:
+        orderId,
+
       cashfree_order_id:
         orderId,
+
       cf_order_id:
         cashfreeOrder.cf_order_id
           ? String(
-              cashfreeOrder.cf_order_id,
+              cashfreeOrder
+                .cf_order_id,
             )
           : null,
-      status: "created",
+
+      status:
+        "created",
+
       gateway_payload: {
         ...cashfreeOrder,
 
@@ -1411,7 +1777,8 @@ export const createPaymentOrder = asyncHandler(
         college_domain_fee:
           collegeDomainFee
             ? Number(
-                collegeDomainFee.fee,
+                collegeDomainFee
+                  .fee,
               )
             : null,
       },
@@ -1420,42 +1787,62 @@ export const createPaymentOrder = asyncHandler(
     return ok(
       res,
       {
-        order_id: orderId,
+        gateway:
+          "cashfree",
+
+        order_id:
+          orderId,
 
         cf_order_id:
-          cashfreeOrder.cf_order_id,
+          cashfreeOrder
+            .cf_order_id,
 
         payment_session_id:
           cashfreeOrder
             .payment_session_id,
 
         amount,
-        currency: "INR",
+        currency:
+          "INR",
+
+        transaction_id:
+          transactionId,
 
         student: {
-          id: student.id,
-          name: student.name,
-          email: student.email,
-          mobile: student.mobile,
+          id:
+            student.id,
+
+          name:
+            student.name,
+
+          email:
+            student.email,
+
+          mobile:
+            customerPhone,
+
           registration_number:
-            student.registration_number,
-            portal_registration_number:
-          portalRegistrationNumber,
+            student
+              .registration_number,
+
+          portal_registration_number:
+            portalRegistrationNumber,
         },
 
         domain: {
-          id: student.domain.id,
+          id:
+            student.domain.id,
+
           domain_name:
             student.domain
               .domain_name,
         },
       },
-      "Payment order created successfully",
+      "Cashfree payment order created successfully",
       201,
     );
   },
 );
-
 
   const safeSignatureCompare = (
   generatedSignature,
@@ -1485,6 +1872,643 @@ export const createPaymentOrder = asyncHandler(
     receivedBuffer,
   );
 };
+
+export const verifyRazorpayPayment =
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    const transaction =
+      await Payment.sequelize
+        .transaction();
+
+    try {
+      const razorpayOrderId =
+        String(
+          req.body
+            .razorpay_order_id ||
+            req.body.order_id ||
+            "",
+        ).trim();
+
+      const razorpayPaymentId =
+        String(
+          req.body
+            .razorpay_payment_id ||
+            "",
+        ).trim();
+
+      const razorpaySignature =
+        String(
+          req.body
+            .razorpay_signature ||
+            "",
+        ).trim();
+
+      if (
+        !razorpayOrderId ||
+        !razorpayPaymentId ||
+        !razorpaySignature
+      ) {
+        throw new AppError(
+          "Razorpay order ID, payment ID and signature are required",
+          422,
+        );
+      }
+
+     const payment =
+  await Payment.findOne({
+    where: {
+      [Op.or]: [
+        {
+          razorpay_order_id:
+            razorpayOrderId,
+        },
+        {
+          order_id:
+            razorpayOrderId,
+        },
+      ],
+    },
+
+    transaction,
+
+    lock:
+      transaction.LOCK.UPDATE,
+  });
+
+if (!payment) {
+  throw new AppError(
+    "Razorpay payment order not found",
+    404,
+  );
+}
+
+if (
+  !payment.razorpay_order_id
+) {
+  await payment.update(
+    {
+      razorpay_order_id:
+        razorpayOrderId,
+    },
+    {
+      transaction,
+    },
+  );
+}
+
+if (
+  String(
+    payment.gateway || "",
+  ).toLowerCase() !==
+  "razorpay"
+) {
+  throw new AppError(
+    "Payment gateway mismatch",
+    409,
+  );
+}
+      /*
+       * Idempotency:
+       * Do not process an already successful
+       * Razorpay payment twice.
+       */
+      if (
+        [
+          "success",
+          "paid",
+        ].includes(
+          payment.status,
+        )
+      ) {
+        const student =
+          await Student.findByPk(
+            payment.student_id,
+            {
+              transaction,
+
+              lock:
+                transaction.LOCK
+                  .UPDATE,
+            },
+          );
+
+        if (!student) {
+          throw new AppError(
+            "Student record not found",
+            404,
+          );
+        }
+
+        const portalRegistrationNumber =
+          student
+            .portal_registration_number ||
+          createPortalRegistrationNumber(
+            student,
+          );
+
+        await student.update(
+          {
+            portal_registration_number:
+              portalRegistrationNumber,
+
+            registration_locked:
+              true,
+
+            payment_status:
+              "paid",
+
+            internship_status:
+              "active",
+          },
+          {
+            transaction,
+          },
+        );
+
+        await transaction.commit();
+
+        try {
+          await ensurePaymentReceipt(
+            payment.id,
+          );
+        } catch (
+          receiptError
+        ) {
+          console.error(
+            "EXISTING RAZORPAY RECEIPT ERROR:",
+            receiptError,
+          );
+        }
+
+        await queuePaymentSuccessNotification(
+          payment.id,
+        );
+
+        return res.json({
+          success: true,
+
+          data: {
+            gateway:
+              "razorpay",
+
+            order_id:
+              payment
+                .razorpay_order_id,
+
+            razorpay_order_id:
+              payment
+                .razorpay_order_id,
+
+            razorpay_payment_id:
+              payment
+                .razorpay_payment_id,
+
+            transaction_id:
+              payment
+                .transaction_id,
+
+            portal_registration_number:
+              portalRegistrationNumber,
+
+            payment_status:
+              "paid",
+
+            internship_status:
+              "active",
+          },
+
+          message:
+            "Payment already verified",
+        });
+      }
+
+      const {
+        keySecret,
+      } =
+        getRazorpayCredentials();
+
+      /*
+       * Razorpay requires the ORIGINAL order ID
+       * stored on our server for signature
+       * generation.
+       */
+      const generatedSignature =
+        crypto
+          .createHmac(
+            "sha256",
+            keySecret,
+          )
+          .update(
+            `${payment.razorpay_order_id}|${razorpayPaymentId}`,
+          )
+          .digest(
+            "hex",
+          );
+
+      if (
+        !safeSignatureCompare(
+          generatedSignature,
+          razorpaySignature,
+        )
+      ) {
+        throw new AppError(
+          "Invalid Razorpay payment signature",
+          401,
+        );
+      }
+
+      let razorpayPayment;
+
+      try {
+        const response =
+          await axios.get(
+            `https://api.razorpay.com/v1/payments/${encodeURIComponent(
+              razorpayPaymentId,
+            )}`,
+            {
+              auth:
+                getRazorpayAuth(),
+
+              timeout:
+                15000,
+            },
+          );
+
+        razorpayPayment =
+          response.data;
+      } catch (error) {
+        console.error(
+          "Razorpay payment fetch error:",
+          error.response?.data ||
+            error.message,
+        );
+
+        throw new AppError(
+          error.response?.data
+            ?.error?.description ||
+            "Unable to verify Razorpay payment",
+          error.response?.status ||
+            500,
+        );
+      }
+
+      const expectedAmountPaise =
+        Math.round(
+          Number(
+            payment.amount,
+          ) * 100,
+        );
+
+      const verifiedAmountPaise =
+        Number(
+          razorpayPayment.amount,
+        );
+
+      const verifiedCurrency =
+        String(
+          razorpayPayment.currency ||
+            "",
+        ).toUpperCase();
+
+      if (
+        razorpayPayment.order_id !==
+          payment
+            .razorpay_order_id ||
+        !Number.isFinite(
+          verifiedAmountPaise,
+        ) ||
+        verifiedAmountPaise !==
+          expectedAmountPaise ||
+        verifiedCurrency !==
+          "INR"
+      ) {
+        throw new AppError(
+          "Razorpay payment order, amount or currency mismatch",
+          409,
+        );
+      }
+
+      /*
+       * Fulfil registration only after the
+       * payment has reached captured state.
+       */
+      if (
+        razorpayPayment.status !==
+        "captured"
+      ) {
+        const waitingStatus =
+          razorpayPayment.status ===
+          "authorized"
+            ? "processing"
+            : "pending";
+
+        await payment.update(
+          {
+            status:
+              waitingStatus,
+
+            razorpay_payment_id:
+              razorpayPaymentId,
+
+            razorpay_signature:
+              razorpaySignature,
+
+            payment_method:
+              razorpayPayment
+                .method ||
+              null,
+
+            payment_message:
+              `Razorpay status: ${razorpayPayment.status}`,
+
+            failure_reason:
+              null,
+
+            gateway_payload: {
+              ...parseJsonObject(
+                payment
+                  .gateway_payload,
+              ),
+
+              razorpay_payment:
+                razorpayPayment,
+            },
+          },
+          {
+            transaction,
+          },
+        );
+
+        await transaction.commit();
+
+        return res
+          .status(202)
+          .json({
+            success:
+              true,
+
+            data: {
+              gateway:
+                "razorpay",
+
+              order_id:
+                payment
+                  .razorpay_order_id,
+
+              razorpay_order_id:
+                payment
+                  .razorpay_order_id,
+
+              razorpay_payment_id:
+                razorpayPaymentId,
+
+              order_status:
+                razorpayPayment
+                  .status,
+
+              payment_status:
+                "pending",
+            },
+
+            message:
+              "Payment is authorised but not captured yet",
+          });
+      }
+
+      await payment.update(
+        {
+          status:
+            "success",
+
+          order_id:
+            payment
+              .razorpay_order_id,
+
+          razorpay_order_id:
+            payment
+              .razorpay_order_id,
+
+          razorpay_payment_id:
+            razorpayPaymentId,
+
+          razorpay_signature:
+            razorpaySignature,
+
+          amount:
+            Number(
+              (
+                verifiedAmountPaise /
+                100
+              ).toFixed(2),
+            ),
+
+          currency:
+            verifiedCurrency,
+
+          paid_at:
+            razorpayPayment
+              .created_at
+              ? new Date(
+                  Number(
+                    razorpayPayment
+                      .created_at,
+                  ) *
+                    1000,
+                )
+              : new Date(),
+
+          payment_method:
+            razorpayPayment.method ||
+            null,
+
+          payment_message:
+            "Payment captured successfully",
+
+          failure_reason:
+            null,
+
+          gateway_payload: {
+            ...parseJsonObject(
+              payment.gateway_payload,
+            ),
+
+            razorpay_payment:
+              razorpayPayment,
+          },
+        },
+        {
+          transaction,
+        },
+      );
+
+      const student =
+        await Student.findByPk(
+          payment.student_id,
+          {
+            transaction,
+
+            lock:
+              transaction.LOCK
+                .UPDATE,
+          },
+        );
+
+      if (!student) {
+        throw new AppError(
+          "Student record not found",
+          404,
+        );
+      }
+
+      const portalRegistrationNumber =
+        student
+          .portal_registration_number ||
+        createPortalRegistrationNumber(
+          student,
+        );
+
+      await student.update(
+        {
+          payment_status:
+            "paid",
+
+          internship_status:
+            "active",
+
+          registration_locked:
+            true,
+
+          portal_registration_number:
+            portalRegistrationNumber,
+        },
+        {
+          transaction,
+        },
+      );
+
+      await transaction.commit();
+
+      try {
+        await ensurePaymentReceipt(
+          payment.id,
+        );
+      } catch (
+        receiptError
+      ) {
+        console.error(
+          "RAZORPAY RECEIPT GENERATION ERROR:",
+          receiptError,
+        );
+      }
+
+      await queuePaymentSuccessNotification(
+        payment.id,
+      );
+
+      return res.json({
+        success: true,
+
+        data: {
+          gateway:
+            "razorpay",
+
+          order_id:
+            payment
+              .razorpay_order_id,
+
+          razorpay_order_id:
+            payment
+              .razorpay_order_id,
+
+          razorpay_payment_id:
+            razorpayPaymentId,
+
+          transaction_id:
+            payment
+              .transaction_id,
+
+          portal_registration_number:
+            portalRegistrationNumber,
+
+          payment_status:
+            "paid",
+
+          internship_status:
+            "active",
+
+          amount:
+            Number(
+              payment.amount,
+            ),
+
+          currency:
+            verifiedCurrency,
+        },
+
+        message:
+          "Razorpay payment verified and account activated successfully",
+      });
+    } catch (error) {
+      if (
+        !transaction.finished
+      ) {
+        await transaction.rollback();
+      }
+
+      console.error(
+        "RAZORPAY PAYMENT VERIFICATION ERROR:",
+        error.response?.data ||
+          error,
+      );
+
+      next(error);
+    }
+  };
+
+export const verifyPayment =
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    const requestedGateway =
+      String(
+        req.body.gateway ||
+          "",
+      )
+        .trim()
+        .toLowerCase();
+
+    const hasRazorpayPayload =
+      Boolean(
+        req.body
+          .razorpay_payment_id ||
+          req.body
+            .razorpay_signature,
+      );
+
+    if (
+      requestedGateway ===
+        "razorpay" ||
+      hasRazorpayPayload
+    ) {
+      return verifyRazorpayPayment(
+        req,
+        res,
+        next,
+      );
+    }
+
+    return verifyCashfreePayment(
+      req,
+      res,
+      next,
+    );
+  };
+
 
 export const verifyCashfreePayment = async (
   req,
@@ -2382,19 +3406,57 @@ const writePaymentReceiptContent = (
     payment.transaction_id,
   );
 
-  addReceiptRow(
-    doc,
-    "Cashfree Order ID",
-    payment.cashfree_order_id ||
-      "-",
-  );
+  const paymentGateway =
+    String(
+      payment.gateway ||
+        "cashfree",
+    )
+      .trim()
+      .toLowerCase();
 
   addReceiptRow(
     doc,
-    "Cashfree Payment ID",
-    payment.cf_payment_id ||
-      "-",
+    "Payment Gateway",
+    paymentGateway ===
+      "razorpay"
+      ? "Razorpay"
+      : "Cashfree",
   );
+
+  if (
+    paymentGateway ===
+    "razorpay"
+  ) {
+    addReceiptRow(
+      doc,
+      "Razorpay Order ID",
+      payment.razorpay_order_id ||
+        payment.order_id ||
+        "-",
+    );
+
+    addReceiptRow(
+      doc,
+      "Razorpay Payment ID",
+      payment.razorpay_payment_id ||
+        "-",
+    );
+  } else {
+    addReceiptRow(
+      doc,
+      "Cashfree Order ID",
+      payment.cashfree_order_id ||
+        payment.order_id ||
+        "-",
+    );
+
+    addReceiptRow(
+      doc,
+      "Cashfree Payment ID",
+      payment.cf_payment_id ||
+        "-",
+    );
+  }
 
   addReceiptRow(
     doc,
@@ -2805,6 +3867,14 @@ export const downloadPaymentReceipt =
             },
             {
               cf_payment_id:
+                transactionId,
+            },
+            {
+              razorpay_order_id:
+                transactionId,
+            },
+            {
+              razorpay_payment_id:
                 transactionId,
             },
           ],
