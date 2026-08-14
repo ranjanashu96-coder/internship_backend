@@ -1812,6 +1812,18 @@ export const update = (entity) =>
       ...req.body,
     };
 
+    /*
+     * Student photo comes from multer. The route must use:
+     * upload.single("photo")
+     */
+    if (
+      entity === "students" &&
+      req.file
+    ) {
+      payload.photo =
+        `/uploads/students/${req.file.filename}`;
+    }
+
     if (payload.password) {
       payload.password_hash = await hashPassword(
         payload.password,
@@ -1820,7 +1832,19 @@ export const update = (entity) =>
       delete payload.password;
     }
 
-    await row.update(payload);
+    try {
+      await row.update(payload);
+    } catch (error) {
+      // Do not leave a newly uploaded photo behind when DB update fails.
+      if (
+        req.file?.path &&
+        fs.existsSync(req.file.path)
+      ) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      throw error;
+    }
 
     ok(res, row, "Updated");
   });

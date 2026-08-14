@@ -230,12 +230,24 @@ router.post(
 |--------------------------------------------------------------------------
 */
 
-router.get("/students", list("students"));
+const studentPhotoUpload = upload(
+  "students",
+  [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ],
+);
+
+router.get(
+  "/students",
+  list("students"),
+);
+
 router.patch(
   "/students/:id/start-internship",
   startStudentInternship,
 );
-
 
 router.post(
   "/students/import",
@@ -249,10 +261,26 @@ router.post(
   importStudents,
 );
 
-router.get("/students/:id", getById("students"));
-router.post("/students", create("students"));
-router.put("/students/:id", update("students"));
-router.delete("/students/:id", remove("students"));
+router.get(
+  "/students/:id",
+  getById("students"),
+);
+
+router.post(
+  "/students",
+  create("students"),
+);
+
+router.put(
+  "/students/:id",
+  studentPhotoUpload.single("photo"),
+  update("students"),
+);
+
+router.delete(
+  "/students/:id",
+  remove("students"),
+);
 
 /*
 |--------------------------------------------------------------------------
