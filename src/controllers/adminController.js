@@ -3221,3 +3221,124 @@ try {
       );
     },
   );
+
+/*
+|--------------------------------------------------------------------------
+| Start Multiple Student Internships
+|--------------------------------------------------------------------------
+*/
+
+export const startStudentInternshipsBulk = asyncHandler(
+  async (req, res) => {
+    const studentIds = [
+      ...new Set(
+        (Array.isArray(req.body.student_ids)
+          ? req.body.student_ids
+          : [])
+          .map(Number)
+          .filter(Number.isInteger),
+      ),
+    ];
+
+    const startDate = String(req.body.start_date || "").trim();
+
+    if (!studentIds.length) {
+      throw new AppError("Select at least one student", 422);
+    }
+
+    if (studentIds.length > 500) {
+      throw new AppError("Maximum 500 students can be started at once", 422);
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      throw new AppError("Invalid internship start date", 422);
+    }
+
+    const students = await Student.findAll({
+      where: { id: { [Op.in]: studentIds } },
+    });
+
+    const studentMap = new Map(students.map((student) => [Number(student.id), student]));
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const internshipStarted = startDate <= today;
+    const startedIds = [];
+    const errors = [];
+
+    for (const studentId of studentIds) {
+      const student = studentMap.get(studentId);
+
+      if (!student) {
+        errors.push({ student_id: studentId, message: "Student not found" });
+        continue;
+      }
+
+      if (student.payment_status !== "paid") {
+        errors.push({
+          student_id: studentId,
+          name: student.name,
+          message: "Payment is not completed",
+        });
+        continue;
+      }
+
+      if (["blocked", "completed"].includes(student.internship_status)) {
+        errors.push({
+          student_id: studentId,
+          name: student.name,
+          message: `Internship is ${student.internship_status}`,
+        });
+        continue;
+      }
+
+      await student.update({
+        internship_start_date: startDate,
+        internship_status: "active",
+        learning_start_date: startDate,
+        attendance_start_date: startDate,
+        learning_access_enabled: internshipStarted,
+        attendance_access_enabled: internshipStarted,
+      });
+
+      startedIds.push(studentId);
+
+      try {
+        await notify({
+          recipientType: "student",
+          recipientId: student.id,
+          type: "internship",
+          title: internshipStarted ? "Internship Started" : "Internship Scheduled",
+          message: internshipStarted
+            ? `Your internship has started from ${startDate}. Learning and attendance are now available.`
+            : `Your internship is scheduled to start on ${startDate}. Learning and attendance will become available from this date.`,
+          actionUrl: "/student",
+          metadata: { student_id: student.id, start_date: startDate },
+          email: student.email,
+          recipientName: student.name,
+          sendEmail: Boolean(student.email),
+          emailSubject: internshipStarted
+            ? "Your RK Nexora Internship Has Started"
+            : "Your RK Nexora Internship Start Date",
+        });
+      } catch (notificationError) {
+        console.error("Bulk internship notification failed:", notificationError);
+      }
+    }
+
+    return ok(
+      res,
+      {
+        requested_count: studentIds.length,
+        started_count: startedIds.length,
+        failed_count: errors.length,
+        started_ids: startedIds,
+        errors,
+      },
+      `${startedIds.length} internship(s) processed successfully`,
+    );
+  },
+);

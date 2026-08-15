@@ -92,6 +92,7 @@ import {
   startStudentInternship,
   getCollegeDomainFees,
   saveCollegeDomainFees,
+  startStudentInternshipsBulk,
 } from "../controllers/adminController.js";
 
 import {
@@ -242,6 +243,11 @@ const studentPhotoUpload = upload(
 router.get(
   "/students",
   list("students"),
+);
+
+router.patch(
+  "/students/start-internship/bulk",
+  startStudentInternshipsBulk,
 );
 
 router.patch(
