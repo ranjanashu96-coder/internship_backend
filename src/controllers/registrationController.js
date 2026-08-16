@@ -3,7 +3,12 @@ import path from "path";
 import PDFDocument from "pdfkit";
 import axios from "axios";
 import crypto from "crypto";
-import { Op } from "sequelize";
+import {
+  Op,
+  col,
+  fn,
+  where as sequelizeWhere,
+} from "sequelize";
 import {
   Domain,
   CollegeDomainFee,
@@ -44,6 +49,93 @@ const normalizeMobileNumber = (
   }
 
   return "";
+};
+
+/*
+ * Excel/imported registration numbers can contain normal spaces,
+ * non-breaking spaces, zero-width characters or a numeric ".0" suffix.
+ * Use the same normalized value throughout the public registration flow.
+ */
+const normalizeRegistrationNumber = (value) => {
+  let normalized = String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u00A0\s]+/g, "")
+    .replace(/[‐‑‒–—−]/g, "-")
+    .replace(/^'+|'+$/g, "")
+    .toUpperCase();
+
+  if (/^\d+\.0+$/.test(normalized)) {
+    normalized = normalized.replace(/\.0+$/, "");
+  }
+
+  return normalized;
+};
+
+const findStudentByRegistrationNumber = async (
+  value,
+  options = {},
+) => {
+  const registrationNumber =
+    normalizeRegistrationNumber(value);
+
+  if (!registrationNumber) {
+    return null;
+  }
+
+  const compactDatabaseRegistration = fn(
+    "UPPER",
+    fn(
+      "REPLACE",
+      fn(
+        "REPLACE",
+        fn(
+          "REPLACE",
+          fn(
+            "REPLACE",
+            fn(
+              "REPLACE",
+              col("registration_number"),
+              " ",
+              "",
+            ),
+            "\t",
+            "",
+          ),
+          "\r",
+          "",
+        ),
+        "\n",
+        "",
+      ),
+      "\u00A0",
+      "",
+    ),
+  );
+
+  const possibleValues =
+    /^\d+$/.test(registrationNumber)
+      ? [registrationNumber, `${registrationNumber}.0`]
+      : [registrationNumber];
+
+  return Student.findOne({
+    ...options,
+    where: {
+      [Op.or]: [
+        {
+          registration_number: {
+            [Op.in]: possibleValues,
+          },
+        },
+        ...possibleValues.map((candidate) =>
+          sequelizeWhere(
+            compactDatabaseRegistration,
+            candidate,
+          ),
+        ),
+      ],
+    },
+  });
 };
 
 const createCashfreeOrderId = (
@@ -493,9 +585,10 @@ const getStudentResponseData = (
 
 export const verifyRegistration =
   asyncHandler(async (req, res) => {
-    const registrationNumber = String(
-      req.body.registration_number || "",
-    ).trim();
+    const registrationNumber =
+      normalizeRegistrationNumber(
+        req.body.registration_number,
+      );
 
     if (!registrationNumber) {
       throw new AppError(
@@ -505,12 +598,9 @@ export const verifyRegistration =
     }
 
     const student =
-      await Student.findOne({
-        where: {
-          registration_number:
-            registrationNumber,
-        },
-      });
+      await findStudentByRegistrationNumber(
+        registrationNumber,
+      );
 
     if (!student) {
       throw new AppError(
@@ -616,10 +706,10 @@ export const verifyRegistration =
 
 export const listRegistrationDomains =
   asyncHandler(async (req, res) => {
-    const registrationNumber = String(
-      req.query.registration_number ||
-        "",
-    ).trim();
+    const registrationNumber =
+      normalizeRegistrationNumber(
+        req.query.registration_number,
+      );
 
     const studentId = Number(
       req.query.student_id ||
@@ -631,16 +721,15 @@ export const listRegistrationDomains =
     let student = null;
 
     if (registrationNumber) {
-      student = await Student.findOne({
-        where: {
-          registration_number:
-            registrationNumber,
-        },
+      student = await findStudentByRegistrationNumber(
+        registrationNumber,
+        {
         attributes: [
           "id",
           "college_id",
         ],
-      });
+        },
+      );
     } else if (studentId) {
       student = await Student.findByPk(
         studentId,
@@ -780,9 +869,10 @@ export const saveRegistration = asyncHandler(
       password,
     } = req.body;
 
-    const registrationNumber = String(
-      registration_number || "",
-    ).trim();
+    const registrationNumber =
+      normalizeRegistrationNumber(
+        registration_number,
+      );
 
     if (!registrationNumber) {
       throw new AppError(
@@ -791,12 +881,10 @@ export const saveRegistration = asyncHandler(
       );
     }
 
-    const student = await Student.findOne({
-      where: {
-        registration_number:
-          registrationNumber,
-      },
-    });
+    const student =
+      await findStudentByRegistrationNumber(
+        registrationNumber,
+      );
 
     if (!student) {
       throw new AppError(
@@ -992,16 +1080,15 @@ await student.update(
 
 export const uploadRegistrationDocuments =
   asyncHandler(async (req, res) => {
-    const registrationNumber = String(
-      req.body.registration_number || "",
-    ).trim();
+    const registrationNumber =
+      normalizeRegistrationNumber(
+        req.body.registration_number,
+      );
 
-    const student = await Student.findOne({
-      where: {
-        registration_number:
-          registrationNumber,
-      },
-    });
+    const student =
+      await findStudentByRegistrationNumber(
+        registrationNumber,
+      );
 
     if (!student) {
       throw new AppError(
