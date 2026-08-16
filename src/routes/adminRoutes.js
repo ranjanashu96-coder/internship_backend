@@ -65,6 +65,12 @@ import {
 } from "../utils/chapterResourceUpload.js";
 
 import {
+  listAdminPayments,
+  markAdminPaymentSuccessful,
+  updateAdminPayment,
+} from "../controllers/adminPaymentController.js";
+
+import {
  list,
   getById,
   create,
@@ -127,6 +133,21 @@ router.get(
 router.get(
   "/reports/export",
   exportAdminReport,
+);
+
+router.get(
+  "/payments",
+  listAdminPayments,
+);
+
+router.patch(
+  "/payments/:id/mark-success",
+  markAdminPaymentSuccessful,
+);
+
+router.patch(
+  "/payments/:id",
+  updateAdminPayment,
 );
 
 router.get(
