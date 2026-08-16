@@ -4473,6 +4473,43 @@ const ensurePaymentReceipt =
     };
   };
 
+export const generateAdminPaymentReceipt =
+  asyncHandler(async (req, res) => {
+    const paymentId = Number(req.params.id);
+
+    if (!paymentId) {
+      throw new AppError("Payment ID is required", 422);
+    }
+
+    const receipt = await ensurePaymentReceipt(paymentId);
+    const payment = await Payment.findByPk(paymentId);
+
+    return ok(
+      res,
+      {
+        payment_id: paymentId,
+        transaction_id: payment?.transaction_id || null,
+        receipt_number: receipt.receiptNumber,
+        receipt_file_name: receipt.fileName,
+      },
+      "Payment receipt generated successfully",
+    );
+  });
+
+export const downloadAdminPaymentReceipt =
+  asyncHandler(async (req, res) => {
+    const paymentId = Number(req.params.id);
+
+    if (!paymentId) {
+      throw new AppError("Payment ID is required", 422);
+    }
+
+    const receipt = await ensurePaymentReceipt(paymentId);
+
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.download(receipt.absolutePath, receipt.fileName);
+  });
+
 export const downloadPaymentReceipt =
   asyncHandler(async (req, res) => {
     const transactionId =

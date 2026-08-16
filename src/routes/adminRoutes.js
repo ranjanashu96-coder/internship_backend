@@ -71,6 +71,11 @@ import {
 } from "../controllers/adminPaymentController.js";
 
 import {
+  generateAdminPaymentReceipt,
+  downloadAdminPaymentReceipt,
+} from "../controllers/registrationController.js";
+
+import {
  list,
   getById,
   create,
@@ -148,6 +153,16 @@ router.patch(
 router.patch(
   "/payments/:id",
   updateAdminPayment,
+);
+
+router.post(
+  "/payments/:id/generate-receipt",
+  generateAdminPaymentReceipt,
+);
+
+router.get(
+  "/payments/:id/receipt",
+  downloadAdminPaymentReceipt,
 );
 
 router.get(
