@@ -65,7 +65,9 @@ app.use(
   }),
 );
 
-/*
+
+
+/* 
 |--------------------------------------------------------------------------
 | Rate Limiting
 |--------------------------------------------------------------------------
@@ -77,48 +79,34 @@ app.use(
     limit: 1000,
     standardHeaders: true,
     legacyHeaders: false,
+
+    skip: (req) =>
+      req.originalUrl.startsWith(
+        "/api/registration/payment/cashfree/webhook",
+      ) ||
+      req.originalUrl.startsWith(
+        "/api/registration/payment/razorpay/webhook",
+      ),
   }),
 );
 
-/*
+/* 
 |--------------------------------------------------------------------------
 | JSON Body Parser
-|--------------------------------------------------------------------------
-|
-| Cashfree webhook signature verification ke liye exact raw request body
-| preserve ki ja rahi hai.
 |--------------------------------------------------------------------------
 */
 
 app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 1000,
-    standardHeaders: true,
-    legacyHeaders: false,
+  express.json({
+    limit: "2mb",
 
-    skip: (req) => {
-      return (
-        req.originalUrl.startsWith(
-          "/api/registration/payment/cashfree/webhook",
-        ) ||
-        req.originalUrl.startsWith(
-          "/api/registration/payment/razorpay/webhook",
-        )
-      );
+    verify: (req, _res, buffer) => {
+      req.rawBody = Buffer.from(buffer);
     },
   }),
 );
 
-
-app.use(
-  express.json({
-    limit: "2mb",
-  }),
-);
-
-
-/*
+/* 
 |--------------------------------------------------------------------------
 | URL Encoded Body Parser
 |--------------------------------------------------------------------------
@@ -130,7 +118,6 @@ app.use(
     limit: "2mb",
   }),
 );
-
 /*
 |--------------------------------------------------------------------------
 | Static Uploads
