@@ -3,9 +3,10 @@ import fs from "fs";
 import path from "path";
 
 import {
-   Student,
+  Student,
   College,
   Domain,
+  CollegeDomainFee,
   Module,
   Chapter,
   ChapterResource,
@@ -1825,14 +1826,27 @@ internship_end_date:
 /**
  * GET /student/profile
  */
+/**
+ * GET /student/profile
+ */
+/**
+ * GET /student/profile
+ */
 export const getProfile = asyncHandler(
   async (req, res) => {
+    /*
+    |--------------------------------------------------------------------------
+    | Student Profile
+    |--------------------------------------------------------------------------
+    */
+
     const student =
       await getCurrentStudent(req, {
         include: [
           {
             model: College,
-            as : "college",
+            as: "college",
+
             attributes: [
               "id",
               "name",
@@ -1853,6 +1867,7 @@ export const getProfile = asyncHandler(
           {
             model: Domain,
             as: "domain",
+
             attributes: [
               "id",
               "domain_name",
@@ -1863,23 +1878,102 @@ export const getProfile = asyncHandler(
         ],
       });
 
+    /*
+    |--------------------------------------------------------------------------
+    | College Assigned Domain Fee
+    |--------------------------------------------------------------------------
+    */
+
+    let collegeDomainFee = null;
+
+    if (
+      student.college_id &&
+      student.domain_id
+    ) {
+      collegeDomainFee =
+        await CollegeDomainFee.findOne({
+          where: {
+            college_id:
+              student.college_id,
+
+            domain_id:
+              student.domain_id,
+
+            // केवल active assigned fee
+            status: "active",
+          },
+
+          attributes: [
+            "id",
+            "college_id",
+            "domain_id",
+            "fee",
+            "status",
+          ],
+        });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fee Calculation
+    |--------------------------------------------------------------------------
+    */
+
+    const masterDomainFee =
+      student.domain?.fee !== null &&
+      student.domain?.fee !== undefined
+        ? toNumber(
+            student.domain.fee,
+          )
+        : 0;
+
+    const assignedDomainFee =
+      collegeDomainFee?.fee !== null &&
+      collegeDomainFee?.fee !== undefined
+        ? toNumber(
+            collegeDomainFee.fee,
+          )
+        : null;
+
+    /*
+     * College assigned fee मिलेगी तो वही जाएगी।
+     * Assigned fee नहीं मिली तो master domain fee जाएगी।
+     */
+    const finalDomainFee =
+      assignedDomainFee !== null
+        ? assignedDomainFee
+        : masterDomainFee;
+
+    /*
+    |--------------------------------------------------------------------------
+    | Response
+    |--------------------------------------------------------------------------
+    */
+
     return ok(res, {
-      id: student.id,
+      id:
+        student.id,
 
       registration_number:
         student.registration_number,
 
+      portal_registration_number:
+        student.portal_registration_number,
+
       student_id:
         student.student_id,
 
-      name: student.name,
+      name:
+        student.name,
 
       father_name:
         student.father_name,
 
-      gender: student.gender,
+      gender:
+        student.gender,
 
-      dob: student.dob,
+      dob:
+        student.dob,
 
       programme:
         student.programme,
@@ -1887,15 +1981,20 @@ export const getProfile = asyncHandler(
       major_subject:
         student.major_subject,
 
-      session: student.session,
+      session:
+        student.session,
 
-      semester: student.semester,
+      semester:
+        student.semester,
 
-      mobile: student.mobile,
+      mobile:
+        student.mobile,
 
-      email: student.email,
+      email:
+        student.email,
 
-      photo: student.photo,
+      photo:
+        student.photo,
 
       registration_date:
         student.registration_date,
@@ -1906,56 +2005,107 @@ export const getProfile = asyncHandler(
       payment_status:
         student.payment_status,
 
-      username: student.username,
+      username:
+        student.username,
 
       academics:
         student.academics_json || {},
 
-      college: student.College
+      /*
+      |--------------------------------------------------------------------------
+      | College Details
+      |--------------------------------------------------------------------------
+      */
+
+      college: student.college
         ? {
-            id: student.College.id,
-            name: student.College.name,
-            code: student.College.code,
+            id:
+              student.college.id,
+
+            name:
+              student.college.name,
+
+            code:
+              student.college.code,
+
             university:
-              student.College
+              student.college
                 .university,
+
             principal_name:
-              student.College
+              student.college
                 .principal_name,
+
             coordinator_name:
-              student.College
+              student.college
                 .coordinator_name,
+
             email:
-              student.College.email,
+              student.college.email,
+
             mobile:
-              student.College.mobile,
+              student.college.mobile,
+
             address:
-              student.College.address,
+              student.college.address,
+
             state:
-              student.College.state,
+              student.college.state,
+
             district:
-              student.College
+              student.college
                 .district,
+
             pincode:
-              student.College.pincode,
-            logo: student.College.logo,
+              student.college
+                .pincode,
+
+            logo:
+              student.college.logo,
           }
         : null,
 
+      /*
+      |--------------------------------------------------------------------------
+      | Domain Details
+      |--------------------------------------------------------------------------
+      */
+
       domain: student.domain
         ? {
-            id: student.domain.id,
+            id:
+              student.domain.id,
+
             domain_name:
               student.domain
                 .domain_name,
+
             duration_hours:
               toNumber(
                 student.domain
                   .duration_hours,
               ),
-            fee: toNumber(
-              student.domain.fee,
-            ),
+
+            /*
+             * Frontend को यही final fee मिलेगी।
+             */
+            fee:
+              finalDomainFee,
+
+            master_fee:
+              masterDomainFee,
+
+            college_assigned_fee:
+              assignedDomainFee,
+
+            fee_source:
+              assignedDomainFee !== null
+                ? "college"
+                : "master",
+
+            is_college_assigned_fee:
+              assignedDomainFee !==
+              null,
           }
         : null,
     });
