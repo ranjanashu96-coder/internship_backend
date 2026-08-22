@@ -25,6 +25,18 @@ const app = express();
 
 /*
 |--------------------------------------------------------------------------
+| Reverse Proxy
+|--------------------------------------------------------------------------
+|
+| Production me Nginx ke peeche backend chal raha hai.
+| Isse Express real client IP identify karega.
+|
+*/
+
+app.set("trust proxy", 1);
+
+/*
+|--------------------------------------------------------------------------
 | Cookie Parser
 |--------------------------------------------------------------------------
 */
@@ -65,35 +77,90 @@ app.use(
   }),
 );
 
-
-
-/* 
+/*
 |--------------------------------------------------------------------------
-| Rate Limiting
+| Rate Limiters
 |--------------------------------------------------------------------------
 */
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 1000,
-    standardHeaders: true,
-    legacyHeaders: false,
+/*
+|--------------------------------------------------------------------------
+| General API Limiter
+|--------------------------------------------------------------------------
+|
+| Normal APIs ke liye:
+| 15 minutes me ek IP se maximum 3000 requests.
+|
+*/
 
-    skip: (req) =>
-      req.originalUrl.startsWith(
-        "/api/registration/payment/cashfree/webhook",
-      ) ||
-      req.originalUrl.startsWith(
-        "/api/registration/payment/razorpay/webhook",
-      ),
-  }),
-);
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
 
-/* 
+  limit: 3000,
+
+  standardHeaders: "draft-7",
+
+  legacyHeaders: false,
+
+  /*
+  |--------------------------------------------------------------------------
+  | Payment Webhooks ko rate limit se bahar rakhen
+  |--------------------------------------------------------------------------
+  */
+
+  skip: (req) =>
+    req.originalUrl.startsWith(
+      "/api/registration/payment/cashfree/webhook",
+    ) ||
+    req.originalUrl.startsWith(
+      "/api/registration/payment/razorpay/webhook",
+    ),
+
+  message: {
+    success: false,
+    message:
+      "Too many requests. Please try again later.",
+  },
+});
+
+/*
+|--------------------------------------------------------------------------
+| Login Limiter
+|--------------------------------------------------------------------------
+|
+| Failed login attempts ko control karega.
+|
+| 15 minutes me maximum 20 failed attempts.
+| Successful login count nahi hoga.
+|
+*/
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+
+  limit: 20,
+
+  standardHeaders: "draft-7",
+
+  legacyHeaders: false,
+
+  skipSuccessfulRequests: true,
+
+  message: {
+    success: false,
+    message:
+      "Too many login attempts. Please try again after 15 minutes.",
+  },
+});
+
+/*
 |--------------------------------------------------------------------------
 | JSON Body Parser
 |--------------------------------------------------------------------------
+|
+| rawBody Cashfree/Razorpay webhook signature verification ke liye bhi
+| preserve ki ja rahi hai.
+|
 */
 
 app.use(
@@ -106,7 +173,7 @@ app.use(
   }),
 );
 
-/* 
+/*
 |--------------------------------------------------------------------------
 | URL Encoded Body Parser
 |--------------------------------------------------------------------------
@@ -118,6 +185,7 @@ app.use(
     limit: "2mb",
   }),
 );
+
 /*
 |--------------------------------------------------------------------------
 | Static Uploads
@@ -142,9 +210,11 @@ app.get(
   (_req, res) => {
     return res.status(200).json({
       success: true,
+
       data: {
         status: "ok",
       },
+
       message:
         "RKNexora API is healthy",
     });
@@ -155,6 +225,9 @@ app.get(
 |--------------------------------------------------------------------------
 | Public Certificate Routes
 |--------------------------------------------------------------------------
+|
+| Public certificate verify/download ko general limiter me nahi rakha hai.
+|
 */
 
 app.use(
@@ -164,8 +237,33 @@ app.use(
 
 /*
 |--------------------------------------------------------------------------
-| API Routes
+| Login Rate Limit
 |--------------------------------------------------------------------------
+|
+| IMPORTANT:
+|
+| POST /api/auth/login
+|
+| par sirf loginLimiter lagega.
+|
+*/
+
+app.use(
+  "/api/auth/login",
+  loginLimiter,
+);
+
+/*
+|--------------------------------------------------------------------------
+| Authentication Routes
+|--------------------------------------------------------------------------
+|
+| /login
+| /refresh
+| /logout
+| /forgot-password
+| /reset-password
+|
 */
 
 app.use(
@@ -173,53 +271,116 @@ app.use(
   authRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Registration Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/registration",
+  generalLimiter,
   registrationRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Admin Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/admin",
+  generalLimiter,
   adminRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| College Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/college",
+  generalLimiter,
   collegeRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Mentor Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/mentor",
+  generalLimiter,
   mentorRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Student Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/student",
+  generalLimiter,
   studentRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Notification Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/notifications",
+  generalLimiter,
   notificationRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Payment Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/payments",
+  generalLimiter,
   paymentRoutes,
 );
 
+/*
+|--------------------------------------------------------------------------
+| Public Routes
+|--------------------------------------------------------------------------
+*/
+
 app.use(
   "/api/public",
+  generalLimiter,
   publicRoutes,
 );
 
 /*
 |--------------------------------------------------------------------------
-| Error Handlers
+| 404 Handler
 |--------------------------------------------------------------------------
 */
 
 app.use(notFound);
+
+/*
+|--------------------------------------------------------------------------
+| Global Error Handler
+|--------------------------------------------------------------------------
+*/
+
 app.use(errorHandler);
 
 export default app;
