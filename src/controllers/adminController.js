@@ -3342,3 +3342,355 @@ export const startStudentInternshipsBulk = asyncHandler(
     );
   },
 );
+/*
+|--------------------------------------------------------------------------
+| Paid Students For Admin Message
+|--------------------------------------------------------------------------
+|
+| GET /admin/messages/paid-students
+|
+*/
+
+export const getPaidStudentsForMessage =
+  asyncHandler(
+    async (req, res) => {
+      const search = String(
+        req.query.search || "",
+      ).trim();
+
+      const where = {
+        payment_status: "paid",
+      };
+
+      if (search) {
+        where[Op.or] = [
+          {
+            name: {
+              [Op.like]: `%${search}%`,
+            },
+          },
+          {
+            registration_number: {
+              [Op.like]: `%${search}%`,
+            },
+          },
+          {
+            email: {
+              [Op.like]: `%${search}%`,
+            },
+          },
+        ];
+      }
+
+      const students =
+        await Student.findAll({
+          where,
+
+          attributes: [
+            "id",
+            "registration_number",
+            "student_id",
+            "name",
+            "email",
+            "mobile",
+            "payment_status",
+            "internship_status",
+            "college_id",
+            "domain_id",
+          ],
+
+          include: [
+            {
+              model: College,
+              as: "college",
+
+              attributes: [
+                "id",
+                "name",
+                "code",
+              ],
+
+              required: false,
+            },
+
+            {
+              model: Domain,
+              as: "domain",
+
+              attributes: [
+                "id",
+                "domain_name",
+              ],
+
+              required: false,
+            },
+          ],
+
+          order: [
+            ["name", "ASC"],
+          ],
+        });
+
+      return ok(
+        res,
+        {
+          items: students,
+
+          total: students.length,
+        },
+        "Paid students fetched successfully",
+      );
+    },
+  );
+
+
+/*
+|--------------------------------------------------------------------------
+| Send Admin Message To Students
+|--------------------------------------------------------------------------
+|
+| POST /admin/messages/send
+|
+| mode:
+| all      => sab paid students
+| selected => selected paid students
+|
+*/
+
+export const sendAdminMessage =
+  asyncHandler(
+    async (req, res) => {
+      const title = String(
+        req.body.title || "",
+      ).trim();
+
+      const message = String(
+        req.body.message || "",
+      ).trim();
+
+      const mode = String(
+        req.body.mode || "",
+      ).trim();
+
+      const studentIds = [
+        ...new Set(
+          (
+            Array.isArray(
+              req.body.student_ids,
+            )
+              ? req.body.student_ids
+              : []
+          )
+            .map(Number)
+            .filter(
+              (id) =>
+                Number.isInteger(id) &&
+                id > 0,
+            ),
+        ),
+      ];
+
+      /*
+      |--------------------------------------------------------------------------
+      | Validation
+      |--------------------------------------------------------------------------
+      */
+
+      if (!title) {
+        throw new AppError(
+          "Message title is required",
+          422,
+        );
+      }
+
+      if (title.length > 150) {
+        throw new AppError(
+          "Title cannot exceed 150 characters",
+          422,
+        );
+      }
+
+      if (!message) {
+        throw new AppError(
+          "Message is required",
+          422,
+        );
+      }
+
+      if (message.length > 5000) {
+        throw new AppError(
+          "Message cannot exceed 5000 characters",
+          422,
+        );
+      }
+
+      if (
+        !["all", "selected"].includes(
+          mode,
+        )
+      ) {
+        throw new AppError(
+          "Invalid recipient mode",
+          422,
+        );
+      }
+
+      if (
+        mode === "selected" &&
+        !studentIds.length
+      ) {
+        throw new AppError(
+          "Select at least one student",
+          422,
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | Student Query
+      |--------------------------------------------------------------------------
+      |
+      | IMPORTANT:
+      | Sirf PAID students ko message jayega.
+      |
+      */
+
+      const where = {
+        payment_status: "paid",
+      };
+
+      if (mode === "selected") {
+        where.id = {
+          [Op.in]: studentIds,
+        };
+      }
+
+      const students =
+        await Student.findAll({
+          where,
+
+          attributes: [
+            "id",
+            "name",
+            "email",
+            "registration_number",
+            "payment_status",
+          ],
+
+          order: [
+            ["id", "ASC"],
+          ],
+        });
+
+      if (!students.length) {
+        throw new AppError(
+          "No paid students found",
+          404,
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | Send Notification
+      |--------------------------------------------------------------------------
+      */
+
+      const sentIds = [];
+      const failed = [];
+
+      for (const student of students) {
+        try {
+          await notify({
+            recipientType:
+              "student",
+
+            recipientId:
+              student.id,
+
+            /*
+             * Aapke existing notification
+             * system me internship type already
+             * successfully use ho raha hai.
+             *
+             * Agar aapke Notification model me
+             * "announcement" allowed hai to
+             * ise announcement kar sakte hain.
+             */
+            type: "internship",
+
+            title,
+
+            message,
+
+            actionUrl:
+              "/student",
+
+            metadata: {
+              source:
+                "admin_message",
+
+              admin_id:
+                req.user?.id ?? null,
+
+              student_id:
+                student.id,
+
+              recipient_mode:
+                mode,
+            },
+
+            /*
+             * Is announcement ko abhi
+             * dashboard notification rakha hai.
+             * Email nahi bhej rahe.
+             */
+            sendEmail: false,
+          });
+
+          sentIds.push(
+            Number(student.id),
+          );
+        } catch (error) {
+          console.error(
+            `Admin message failed for student ${student.id}:`,
+            error,
+          );
+
+          failed.push({
+            student_id:
+              Number(student.id),
+
+            name:
+              student.name,
+
+            message:
+              error?.message ||
+              "Notification failed",
+          });
+        }
+      }
+
+      return ok(
+        res,
+        {
+          recipient_mode:
+            mode,
+
+          requested_count:
+            students.length,
+
+          sent_count:
+            sentIds.length,
+
+          failed_count:
+            failed.length,
+
+          sent_student_ids:
+            sentIds,
+
+          failed,
+        },
+        `${sentIds.length} student(s) ko message sent successfully`,
+      );
+    },
+  );

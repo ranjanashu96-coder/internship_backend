@@ -104,6 +104,8 @@ import {
   getCollegeDomainFees,
   saveCollegeDomainFees,
   startStudentInternshipsBulk,
+  getPaidStudentsForMessage,
+sendAdminMessage,
 } from "../controllers/adminController.js";
 
 import {
@@ -279,6 +281,22 @@ const studentPhotoUpload = upload(
 router.get(
   "/students",
   list("students"),
+);
+
+/*
+|--------------------------------------------------------------------------
+| Admin Student Messages
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/messages/paid-students",
+  getPaidStudentsForMessage,
+);
+
+router.post(
+  "/messages/send",
+  sendAdminMessage,
 );
 
 router.patch(
