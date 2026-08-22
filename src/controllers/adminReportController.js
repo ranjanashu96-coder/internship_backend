@@ -26,6 +26,8 @@ const REPORT_COLUMNS = {
     { key: "portal_registration_number", label: "RK Nexora Registration No." },
     { key: "student_id", label: "Student ID" },
     { key: "name", label: "Student Name" },
+    { key: "mobile", label: "Mobile Number" },
+    { key: "email", label: "Email" },
     { key: "college", label: "College" },
     { key: "domain", label: "Domain" },
     { key: "programme", label: "Programme" },
