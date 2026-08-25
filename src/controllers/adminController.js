@@ -784,72 +784,129 @@ export const list = (entity) =>
     | Student filters
     |--------------------------------------------------------------------------
     */
+if (entity === "students") {
+  if (req.query.college_id) {
+    where.college_id =
+      req.query.college_id;
+  }
 
-    if (entity === "students") {
-      if (req.query.college_id) {
-        where.college_id =
-          req.query.college_id;
-      }
+  if (req.query.domain_id) {
+    where.domain_id =
+      req.query.domain_id;
+  }
 
-      if (req.query.domain_id) {
-  where.domain_id =
-    req.query.domain_id;
-}
+  if (req.query.batch_id) {
+    where.batch_id =
+      req.query.batch_id;
+  }
 
-if (req.query.batch_id) {
-  where.batch_id =
-    req.query.batch_id;
-}
+  if (req.query.mentor_id) {
+    where.mentor_id =
+      req.query.mentor_id;
+  }
 
-if (req.query.mentor_id) {
-  where.mentor_id =
-    req.query.mentor_id;
-}
+  if (req.query.session) {
+    where.session =
+      req.query.session;
+  }
 
-      if (req.query.session) {
-        where.session =
-          req.query.session;
-      }
+  if (req.query.semester) {
+    where.semester =
+      req.query.semester;
+  }
 
-      if (req.query.semester) {
-        where.semester =
-          req.query.semester;
-      }
+  if (
+    req.query.payment_status
+  ) {
+    where.payment_status =
+      req.query.payment_status;
+  }
 
-      if (req.query.payment_status) {
-  where.payment_status =
-    req.query.payment_status;
-}
+  /*
+  |--------------------------------------------------------------------------
+  | Registration Date Filter
+  |--------------------------------------------------------------------------
+  */
 
-      if (req.query.search) {
-        where[Op.or] = [
-          {
-            registration_number: {
-              [Op.like]:
-                `%${req.query.search}%`,
-            },
-          },
-          {
-            student_id: {
-              [Op.like]:
-                `%${req.query.search}%`,
-            },
-          },
-          {
-            name: {
-              [Op.like]:
-                `%${req.query.search}%`,
-            },
-          },
-          {
-            email: {
-              [Op.like]:
-                `%${req.query.search}%`,
-            },
-          },
-        ];
-      }
+  const fromDate =
+    String(
+      req.query.from_date ||
+        "",
+    ).trim();
+
+  const toDate =
+    String(
+      req.query.to_date ||
+        "",
+    ).trim();
+
+  if (
+    fromDate &&
+    toDate &&
+    fromDate > toDate
+  ) {
+    throw new AppError(
+      "From date cannot be after To date",
+      422,
+    );
+  }
+
+  if (
+    fromDate ||
+    toDate
+  ) {
+    where.registration_date =
+      {};
+
+    if (fromDate) {
+      where.registration_date[
+        Op.gte
+      ] = new Date(
+        `${fromDate}T00:00:00`,
+      );
     }
+
+    if (toDate) {
+      where.registration_date[
+        Op.lte
+      ] = new Date(
+        `${toDate}T23:59:59`,
+      );
+    }
+  }
+
+  if (req.query.search) {
+    where[Op.or] = [
+      {
+        registration_number: {
+          [Op.like]:
+            `%${req.query.search}%`,
+        },
+      },
+
+      {
+        student_id: {
+          [Op.like]:
+            `%${req.query.search}%`,
+        },
+      },
+
+      {
+        name: {
+          [Op.like]:
+            `%${req.query.search}%`,
+        },
+      },
+
+      {
+        email: {
+          [Op.like]:
+            `%${req.query.search}%`,
+        },
+      },
+    ];
+  }
+}
 
     /*
     |--------------------------------------------------------------------------

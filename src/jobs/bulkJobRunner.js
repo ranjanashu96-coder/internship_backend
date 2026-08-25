@@ -1055,6 +1055,59 @@ buildStudentQuery(payload = {}) {
       payload.internship_status;
   }
 
+  /*
+|--------------------------------------------------------------------------
+| Student Registration Date Filter
+|--------------------------------------------------------------------------
+*/
+
+const studentFromDate =
+  String(
+    payload.student_from_date ||
+      "",
+  ).trim();
+
+const studentToDate =
+  String(
+    payload.student_to_date ||
+      "",
+  ).trim();
+
+if (
+  studentFromDate &&
+  studentToDate &&
+  studentFromDate >
+    studentToDate
+) {
+  throw new Error(
+    "Student from date cannot be after student to date",
+  );
+}
+
+if (
+  studentFromDate ||
+  studentToDate
+) {
+  where.registration_date =
+    {};
+
+  if (studentFromDate) {
+    where.registration_date[
+      Op.gte
+    ] = new Date(
+      `${studentFromDate}T00:00:00`,
+    );
+  }
+
+  if (studentToDate) {
+    where.registration_date[
+      Op.lte
+    ] = new Date(
+      `${studentToDate}T23:59:59`,
+    );
+  }
+}
+
   const include = [
     {
       model: College,
