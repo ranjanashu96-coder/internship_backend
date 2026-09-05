@@ -2,6 +2,7 @@ import { DataTypes } from "sequelize";
 import Quiz from "./Quiz.js";
 import QuizAttempt from "./QuizAttempt.js";
 import QuizAnswer from "./QuizAnswer.js";
+import CollegeSettlement from "./CollegeSettlement.js";
 import sequelize from "../config/database.js";
 const common = { created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }, updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW } };
 const define=(name, attrs, opts={})=>sequelize.define(name, attrs,{ tableName: opts.tableName||name.toLowerCase(), timestamps:false, indexes:opts.indexes||[] });
@@ -1963,5 +1964,45 @@ EmailQueue.belongsTo(
   },
 );
 
-export { sequelize , Quiz,QuizAttempt, QuizAnswer,};
+College.hasMany(
+  CollegeSettlement,
+  {
+    foreignKey:
+      "college_id",
+    as:
+      "settlements",
+  },
+);
+
+CollegeSettlement.belongsTo(
+  College,
+  {
+    foreignKey:
+      "college_id",
+    as:
+      "college",
+  },
+);
+
+User.hasMany(
+  CollegeSettlement,
+  {
+    foreignKey:
+      "created_by",
+    as:
+      "createdCollegeSettlements",
+  },
+);
+
+CollegeSettlement.belongsTo(
+  User,
+  {
+    foreignKey:
+      "created_by",
+    as:
+      "createdBy",
+  },
+);
+
+export { sequelize , Quiz,QuizAttempt, QuizAnswer, CollegeSettlement,};
  
