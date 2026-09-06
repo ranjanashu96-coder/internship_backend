@@ -15,6 +15,7 @@ import publicRoutes from "./routes/publicRoutes.js";
 import registrationRoutes from "./routes/registrationRoutes.js";
 import publicCertificateRoutes from "./routes/publicCertificateRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import liveClassRoutes from "./routes/liveClassRoutes.js";
 
 /*
 |--------------------------------------------------------------------------
@@ -222,7 +223,7 @@ app.use(
   generalLimiter,
   publicRoutes,
 );
-
+app.use("/api",  generalLimiter,liveClassRoutes);
 app.use(notFound);
 
 app.use(errorHandler);

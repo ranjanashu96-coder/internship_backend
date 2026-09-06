@@ -3,7 +3,9 @@ import Quiz from "./Quiz.js";
 import QuizAttempt from "./QuizAttempt.js";
 import QuizAnswer from "./QuizAnswer.js";
 import CollegeSettlement from "./CollegeSettlement.js";
+import LiveClass from "./LiveClass.js";
 import sequelize from "../config/database.js";
+
 const common = { created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }, updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW } };
 const define=(name, attrs, opts={})=>sequelize.define(name, attrs,{ tableName: opts.tableName||name.toLowerCase(), timestamps:false, indexes:opts.indexes||[] });
 
@@ -2003,6 +2005,35 @@ CollegeSettlement.belongsTo(
       "createdBy",
   },
 );
+Domain.hasMany(LiveClass, {
+  foreignKey: "domain_id",
+  as: "liveClasses",
+});
 
-export { sequelize , Quiz,QuizAttempt, QuizAnswer, CollegeSettlement,};
+LiveClass.belongsTo(Domain, {
+  foreignKey: "domain_id",
+  as: "domain",
+});
+
+Module.hasMany(LiveClass, {
+  foreignKey: "module_id",
+  as: "liveClasses",
+});
+
+LiveClass.belongsTo(Module, {
+  foreignKey: "module_id",
+  as: "module",
+});
+
+Chapter.hasMany(LiveClass, {
+  foreignKey: "chapter_id",
+  as: "liveClasses",
+});
+
+LiveClass.belongsTo(Chapter, {
+  foreignKey: "chapter_id",
+  as: "chapter",
+});
+
+export { sequelize , Quiz,QuizAttempt, QuizAnswer, CollegeSettlement,LiveClass};
  
