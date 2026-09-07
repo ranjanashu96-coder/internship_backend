@@ -730,38 +730,169 @@ export const deleteLiveClass =
 
 const getLoggedInStudent =
   async (req) => {
-    const directStudentId =
-      Number(
-        req.user?.student_id ||
-          0,
-      );
+    console.log(
+      "LIVE CLASS AUTH USER:",
+      {
+        id:
+          req.user?.id ??
+          null,
 
-    if (directStudentId) {
-      const byId =
-        await Student.findByPk(
-          directStudentId,
+        student_id:
+          req.user?.student_id ??
+          null,
+
+        registration_number:
+          req.user
+            ?.registration_number ??
+          null,
+
+        email:
+          req.user?.email ??
+          null,
+      },
+    );
+
+    // ==========================================================
+    // 1. STUDENT ID
+    // ==========================================================
+
+    const studentId =
+      String(
+        req.user?.student_id ||
+          "",
+      ).trim();
+
+    if (studentId) {
+      /*
+       * IMPORTANT:
+       *
+       * req.user.student_id normally Student table ke
+       * "student_id" column ka value hai.
+       *
+       * Ye Student table ka primary key "id" nahi hai.
+       */
+      const byStudentId =
+        await Student.findOne({
+          where: {
+            student_id:
+              studentId,
+          },
+        });
+
+      if (byStudentId) {
+        console.log(
+          "LIVE CLASS STUDENT MATCHED BY student_id:",
+          byStudentId.id,
         );
 
-      if (byId) {
-        return byId;
+        return byStudentId;
       }
     }
 
+    // ==========================================================
+    // 2. REGISTRATION NUMBER
+    // ==========================================================
+
+    const registrationNumber =
+      String(
+        req.user
+          ?.registration_number ||
+          "",
+      ).trim();
+
+    if (registrationNumber) {
+      const byRegistration =
+        await Student.findOne({
+          where: {
+            registration_number:
+              registrationNumber,
+          },
+        });
+
+      if (byRegistration) {
+        console.log(
+          "LIVE CLASS STUDENT MATCHED BY registration_number:",
+          byRegistration.id,
+        );
+
+        return byRegistration;
+      }
+    }
+
+    // ==========================================================
+    // 3. EMAIL
+    // ==========================================================
+
     const email =
       String(
-        req.user?.email || "",
-      ).trim();
+        req.user?.email ||
+          "",
+      )
+        .trim()
+        .toLowerCase();
 
     if (email) {
       const byEmail =
         await Student.findOne({
-          where: { email },
+          where: {
+            email,
+          },
         });
 
       if (byEmail) {
+        console.log(
+          "LIVE CLASS STUDENT MATCHED BY email:",
+          byEmail.id,
+        );
+
         return byEmail;
       }
+
+      /*
+       * Agar database me email mixed case / spaces
+       * ke saath stored ho.
+       */
+      const allSameEmail =
+        await Student.findOne({
+          where: {
+            email: {
+              [Op.like]:
+                email,
+            },
+          },
+        });
+
+      if (allSameEmail) {
+        return allSameEmail;
+      }
     }
+
+    // ==========================================================
+    // NOT LINKED
+    // ==========================================================
+
+    console.error(
+      "LIVE CLASS STUDENT PROFILE NOT FOUND",
+      {
+        auth_id:
+          req.user?.id ??
+          null,
+
+        student_id:
+          req.user
+            ?.student_id ??
+          null,
+
+        registration_number:
+          req.user
+            ?.registration_number ??
+          null,
+
+        email:
+          req.user?.email ??
+          null,
+      },
+    );
 
     throw new AppError(
       "Student profile is not linked with logged in account",
