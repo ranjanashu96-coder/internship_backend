@@ -4253,7 +4253,12 @@ addReceiptRow(
 };
 
 const ensurePaymentReceipt =
-  async (paymentId) => {
+  async (
+    paymentId,
+    {
+      forceRegenerate = false,
+    } = {},
+  ) => {
     const payment =
       await Payment.findByPk(
         paymentId,
@@ -4285,27 +4290,30 @@ const ensurePaymentReceipt =
         payment.receipt_path,
       );
 
-    if (
-      existingReceiptPath &&
-      await receiptFileExists(
+  if (
+  !forceRegenerate &&
+  existingReceiptPath &&
+  await receiptFileExists(
+    existingReceiptPath,
+  )
+) {
+  return {
+    absolutePath:
+      existingReceiptPath,
+
+    fileName:
+      path.basename(
         existingReceiptPath,
-      )
-    ) {
-      return {
-        absolutePath:
-          existingReceiptPath,
+      ),
 
-        fileName:
-          path.basename(
-            existingReceiptPath,
-          ),
+    receiptNumber:
+      getReceiptNumber(
+        payment,
+      ),
 
-        receiptNumber:
-          getReceiptNumber(
-            payment,
-          ),
-      };
-    }
+    regenerated: false,
+  };
+}
 
     const student =
       await Student.findByPk(
@@ -4470,29 +4478,64 @@ const ensurePaymentReceipt =
       absolutePath,
       fileName,
       receiptNumber,
+      forceRegenerate,
     };
   };
 
 export const generateAdminPaymentReceipt =
   asyncHandler(async (req, res) => {
-    const paymentId = Number(req.params.id);
+    const paymentId =
+      Number(req.params.id);
 
     if (!paymentId) {
-      throw new AppError("Payment ID is required", 422);
+      throw new AppError(
+        "Payment ID is required",
+        422,
+      );
     }
 
-    const receipt = await ensurePaymentReceipt(paymentId);
-    const payment = await Payment.findByPk(paymentId);
+    /*
+     * Admin Generate/Regenerate action:
+     * Existing PDF hone par bhi fresh
+     * receipt generate hogi.
+     */
+    const receipt =
+      await ensurePaymentReceipt(
+        paymentId,
+        {
+          forceRegenerate: true,
+        },
+      );
+
+    const payment =
+      await Payment.findByPk(
+        paymentId,
+      );
 
     return ok(
       res,
       {
-        payment_id: paymentId,
-        transaction_id: payment?.transaction_id || null,
-        receipt_number: receipt.receiptNumber,
-        receipt_file_name: receipt.fileName,
+        payment_id:
+          paymentId,
+
+        transaction_id:
+          payment?.transaction_id ||
+          null,
+
+        receipt_number:
+          receipt.receiptNumber,
+
+        receipt_file_name:
+          receipt.fileName,
+
+        receipt_generated_at:
+          payment?.receipt_generated_at ||
+          null,
+
+        regenerated:
+          true,
       },
-      "Payment receipt generated successfully",
+      "Payment receipt regenerated successfully",
     );
   });
 
