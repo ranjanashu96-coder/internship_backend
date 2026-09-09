@@ -15,6 +15,16 @@ import {
   listMyQuizAttempts,
 } from "../controllers/studentQuizController.js";
 
+import {
+  resourceProgress,
+  resourceHeartbeat,
+  chapterRequirements,
+  joinLiveClass,
+  liveClassHeartbeat,
+  leaveLiveClass,
+  chapterEngagementHeartbeat,
+} from "../controllers/learningTrackingController.js";
+
 const r = Router();
 
 /*
@@ -84,14 +94,62 @@ r.get(
 |--------------------------------------------------------------------------
 */
 
+/*
+|--------------------------------------------------------------------------
+| Learning
+|--------------------------------------------------------------------------
+*/
+
 r.get(
   "/learning",
   c.learning,
 );
 
+r.get(
+  "/learning/resources/:resourceId/progress",
+  resourceProgress,
+);
+
+r.post(
+  "/learning/resources/:resourceId/heartbeat",
+  resourceHeartbeat,
+);
+
+r.get(
+  "/chapters/:chapterId/requirements",
+  chapterRequirements,
+);
+
+r.post(
+  "/chapters/:chapterId/engagement/heartbeat",
+  chapterEngagementHeartbeat,
+);
+
+
 r.post(
   "/chapters/:chapterId/complete",
   c.completeChapter,
+);
+
+/*
+|--------------------------------------------------------------------------
+| Live Class Attendance Tracking
+|--------------------------------------------------------------------------
+*/
+
+r.post(
+  "/live-classes/:id/join",
+  joinLiveClass,
+);
+
+r.post(
+  "/live-classes/:id/heartbeat",
+  liveClassHeartbeat,
+);
+
+r.post(
+  "/live-classes/:id/leave",
+  leaveLiveClass,
 );
 
 /*

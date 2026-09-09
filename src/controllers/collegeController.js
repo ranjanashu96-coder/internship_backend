@@ -9,6 +9,8 @@ import {
   Certificate,
   Domain,
   Payment,
+  RefreshToken,
+  sequelize,
 } from "../models/index.js";
 
 import {
@@ -27,6 +29,10 @@ import {
 import {
   ensureDir,
 } from "../utils/files.js";
+
+import {
+  hashPassword,
+} from "../utils/security.js";
 
 const getCollegeId = (req) => {
   const collegeId = req.user?.college_id;
@@ -2061,6 +2067,130 @@ export const registrations = asyncHandler(
     );
   },
 );
+
+
+/**
+ * PATCH /college/students/:studentId/password
+ *
+ * College admin can reset passwords only for students that belong
+ * to the logged-in college.
+ */
+export const resetStudentPassword =
+  asyncHandler(
+    async (req, res) => {
+      const collegeId =
+        getCollegeId(req);
+
+      const studentId =
+        Number(
+          req.params.studentId,
+        );
+
+      if (
+        !Number.isInteger(
+          studentId,
+        ) ||
+        studentId <= 0
+      ) {
+        throw new AppError(
+          "Invalid student ID",
+          422,
+        );
+      }
+
+      const newPassword =
+        String(
+          req.body?.new_password ||
+            "",
+        );
+
+      if (
+        newPassword.length < 8
+      ) {
+        throw new AppError(
+          "Password must be at least 8 characters",
+          422,
+        );
+      }
+
+      /*
+       * Security boundary:
+       * college_id is part of the lookup itself.
+       * A college can never reset another college's student.
+       */
+      const student =
+        await Student.findOne({
+          where: {
+            id: studentId,
+            college_id:
+              collegeId,
+          },
+        });
+
+      if (!student) {
+        throw new AppError(
+          "Student not found in your college",
+          404,
+        );
+      }
+
+      const passwordHash =
+        await hashPassword(
+          newPassword,
+        );
+
+      await sequelize.transaction(
+        async (transaction) => {
+          await student.update(
+            {
+              password_hash:
+                passwordHash,
+            },
+            {
+              transaction,
+            },
+          );
+
+          /*
+           * Force re-login on existing refresh-token based sessions.
+           */
+          await RefreshToken.update(
+            {
+              revoked_at:
+                new Date(),
+            },
+            {
+              where: {
+                account_id:
+                  student.id,
+                account_type:
+                  "student",
+                role: "student",
+                revoked_at: null,
+              },
+              transaction,
+            },
+          );
+        },
+      );
+
+      return ok(
+        res,
+        {
+          student_id:
+            student.id,
+
+          registration_number:
+            student
+              .registration_number,
+
+          name: student.name,
+        },
+        "Student password changed successfully",
+      );
+    },
+  );
+
 
 export const studentsWithCertificates =
   asyncHandler(

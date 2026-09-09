@@ -106,6 +106,7 @@ import {
   startStudentInternshipsBulk,
   getPaidStudentsForMessage,
 sendAdminMessage,
+  resetStudentPassword,
 } from "../controllers/adminController.js";
 
 import {
@@ -307,6 +308,11 @@ router.patch(
 router.patch(
   "/students/:id/start-internship",
   startStudentInternship,
+);
+
+router.patch(
+  "/students/:id/password",
+  resetStudentPassword,
 );
 
 router.post(

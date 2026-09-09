@@ -37,6 +37,8 @@ import {
   hashPassword,
 } from "../utils/security.js";
 
+import { assertChapterLearningRequirements } from "../services/learningTrackingService.js";
+
 /**
  * Returns the authenticated student.
  *
@@ -3323,6 +3325,10 @@ export const completeChapter =
         404,
       );
     }
+    await assertChapterLearningRequirements({
+  studentId: student.id,
+  chapterId,
+});
 
     const [completion, created] =
       await ChapterCompletion.findOrCreate({

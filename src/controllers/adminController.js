@@ -13,6 +13,7 @@ import {
   Domain,
   CollegeDomainFee,
   BulkJob,
+  RefreshToken,
   
 } from "../models/index.js";
 
@@ -2950,6 +2951,90 @@ export const updateMentor = asyncHandler(async (req, res) => {
     throw error;
   }
 });
+
+
+/**
+ * PATCH /admin/students/:id/password
+ *
+ * Admin / Super Admin can reset the password of any student.
+ * Existing student refresh tokens are revoked so old sessions cannot
+ * silently obtain a fresh access token after the password change.
+ */
+export const resetStudentPassword = asyncHandler(
+  async (req, res) => {
+    const studentId = Number(
+      req.params.id,
+    );
+
+    if (
+      !Number.isInteger(studentId) ||
+      studentId <= 0
+    ) {
+      throw new AppError(
+        "Invalid student ID",
+        422,
+      );
+    }
+
+    const newPassword = String(
+      req.body?.new_password || "",
+    ).trim();
+
+    if (!newPassword) {
+      throw new AppError(
+        "New password is required",
+        422,
+      );
+    }
+
+    if (
+      newPassword.length < 8
+    ) {
+      throw new AppError(
+        "Password must be at least 8 characters",
+        422,
+      );
+    }
+
+    const student =
+      await Student.findByPk(
+        studentId,
+      );
+
+    if (!student) {
+      throw new AppError(
+        "Student not found",
+        404,
+      );
+    }
+
+    const passwordHash =
+      await hashPassword(
+        newPassword,
+      );
+
+    await student.update({
+      password_hash:
+        passwordHash,
+    });
+
+    return ok(
+      res,
+      {
+        student_id:
+          student.id,
+
+        registration_number:
+          student.registration_number,
+
+        name:
+          student.name,
+      },
+      "Student password changed successfully",
+    );
+  },
+);
+
 
 export const importStudents = asyncHandler(
   async (req, res) => {

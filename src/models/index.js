@@ -5,6 +5,10 @@ import QuizAnswer from "./QuizAnswer.js";
 import CollegeSettlement from "./CollegeSettlement.js";
 import LiveClass from "./LiveClass.js";
 import sequelize from "../config/database.js";
+import StudentResourceProgress from "./StudentResourceProgress.js";
+import LiveClassAttendanceSession from "./LiveClassAttendanceSession.js";
+import StudentLiveClassProgress from "./StudentLiveClassProgress.js";
+import StudentChapterEngagement from "./StudentChapterEngagement.js";
 
 const common = { created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }, updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW } };
 const define=(name, attrs, opts={})=>sequelize.define(name, attrs,{ tableName: opts.tableName||name.toLowerCase(), timestamps:false, indexes:opts.indexes||[] });
@@ -2035,5 +2039,4 @@ LiveClass.belongsTo(Chapter, {
   as: "chapter",
 });
 
-export { sequelize , Quiz,QuizAttempt, QuizAnswer, CollegeSettlement,LiveClass};
- 
+export { sequelize , Quiz,QuizAttempt, QuizAnswer, CollegeSettlement,LiveClass, StudentResourceProgress, LiveClassAttendanceSession, StudentLiveClassProgress, StudentChapterEngagement};

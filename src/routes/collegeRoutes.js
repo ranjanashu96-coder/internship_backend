@@ -20,6 +20,7 @@ import {
    studentsWithCertificates,
   downloadStudentCertificate,
   dashboard,
+  resetStudentPassword,
 } from "../controllers/collegeController.js";
 
 const router = Router();
@@ -80,6 +81,11 @@ router.get(
 router.get(
   "/students",
   studentsWithCertificates,
+);
+
+router.patch(
+  "/students/:studentId/password",
+  resetStudentPassword,
 );
 
 router.get(
