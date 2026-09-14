@@ -12,6 +12,7 @@ import {
   ChapterResource,
   Quiz,
   QuizAttempt,
+  QuizReattemptGrant,
   ChapterCompletion,
   Assignment,
   Submission,
@@ -2831,6 +2832,40 @@ export const learning = asyncHandler(
     let quizScoreTotal = 0;
     let scoredQuizCount = 0;
 
+    const grantRows =
+      quizIds.length > 0
+        ? await QuizReattemptGrant.findAll({
+            where: {
+              student_id: student.id,
+              quiz_id: { [Op.in]: quizIds },
+            },
+            attributes: [
+              "quiz_id",
+              "extra_attempts",
+            ],
+          })
+        : [];
+
+    const grantedAttemptsByQuiz =
+      new Map();
+
+    for (const grant of grantRows) {
+      const quizId = Number(
+        grant.quiz_id,
+      );
+      grantedAttemptsByQuiz.set(
+        quizId,
+        Number(
+          grantedAttemptsByQuiz.get(
+            quizId,
+          ) || 0,
+        ) +
+          Number(
+            grant.extra_attempts || 0,
+          ),
+      );
+    }
+
     const formattedModules =
       modules.map((module) => {
         const moduleJson =
@@ -2990,12 +3025,23 @@ export const learning = asyncHandler(
                 1;
             }
 
-            const attemptsAllowed =
+            const baseAttemptsAllowed =
               Number(
                 chapter.quiz
                   .attempts_allowed ||
                   1,
               );
+
+            const extraAttemptsAllowed =
+              Number(
+                grantedAttemptsByQuiz.get(
+                  quizId,
+                ) || 0,
+              );
+
+            const attemptsAllowed =
+              baseAttemptsAllowed +
+              extraAttemptsAllowed;
 
             const attemptsUsed =
               finalizedAttempts.length;

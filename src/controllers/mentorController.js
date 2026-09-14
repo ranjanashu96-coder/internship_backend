@@ -9,6 +9,9 @@ import {
   Assessment,
   College,
   Domain,
+  Quiz,
+  QuizAttempt,
+  QuizReattemptGrant,
 } from "../models/index.js";
 
 import {
@@ -377,10 +380,17 @@ export const submitAssessment =
             req.body
               .criteria_ratings,
 
+          assessment_type:
+            ["midterm", "final"].includes(
+              req.body.assessment_type,
+            )
+              ? req.body.assessment_type
+              : "final",
+
           overall_performance:
             req.body
               .overall_performance ||
-            null,
+            "Satisfactory",
 
           supervisor_remarks:
             req.body
@@ -395,6 +405,321 @@ export const submitAssessment =
         res,
         assessment,
         "Assessment submitted successfully",
+      );
+    },
+  );
+
+/*
+|--------------------------------------------------------------------------
+| Mentor: Real dashboard
+|--------------------------------------------------------------------------
+*/
+
+export const mentorDashboard =
+  asyncHandler(
+    async (req, res) => {
+      const mentor =
+        await getLoggedInMentor(
+          req,
+        );
+
+      const students =
+        await Student.findAll({
+          where: {
+            mentor_id: mentor.id,
+          },
+
+          attributes: [
+            "id",
+            "name",
+            "registration_number",
+            "internship_status",
+            "total_progress",
+            "domain_id",
+            "college_id",
+            "created_at",
+          ],
+
+          include: [
+            {
+              model: College,
+              as: "college",
+              attributes: [
+                "id",
+                "name",
+                "code",
+              ],
+              required: false,
+            },
+            {
+              model: Domain,
+              as: "domain",
+              attributes: [
+                "id",
+                "domain_name",
+              ],
+              required: false,
+            },
+          ],
+
+          order: [
+            ["id", "DESC"],
+          ],
+        });
+
+      const studentIds =
+        students.map(
+          (student) =>
+            Number(student.id),
+        );
+
+      const totalStudents =
+        students.length;
+
+      const activeStudents =
+        students.filter(
+          (student) =>
+            student.internship_status ===
+            "active",
+        ).length;
+
+      const completedStudents =
+        students.filter(
+          (student) =>
+            student.internship_status ===
+            "completed",
+        ).length;
+
+      const averageProgress =
+        totalStudents > 0
+          ? Number(
+              (
+                students.reduce(
+                  (sum, student) =>
+                    sum +
+                    Number(
+                      student.total_progress ||
+                        0,
+                    ),
+                  0,
+                ) / totalStudents
+              ).toFixed(2),
+            )
+          : 0;
+
+      let pendingReviews = 0;
+      let assessmentsSubmitted = 0;
+      let failedExhausted = 0;
+
+      if (studentIds.length > 0) {
+        pendingReviews =
+          await Submission.count({
+            where: {
+              student_id: {
+                [Op.in]: studentIds,
+              },
+              status: "submitted",
+            },
+          });
+
+        assessmentsSubmitted =
+          await Assessment.count({
+            where: {
+              mentor_id: mentor.id,
+              student_id: {
+                [Op.in]: studentIds,
+              },
+              status: {
+                [Op.in]: [
+                  "submitted",
+                  "approved",
+                ],
+              },
+            },
+          });
+
+        const attempts =
+          await QuizAttempt.findAll({
+            where: {
+              student_id: {
+                [Op.in]: studentIds,
+              },
+              status: {
+                [Op.in]: [
+                  "submitted",
+                  "expired",
+                ],
+              },
+            },
+          });
+
+        const quizIds =
+          [
+            ...new Set(
+              attempts.map(
+                (attempt) =>
+                  Number(
+                    attempt.quiz_id,
+                  ),
+              ),
+            ),
+          ];
+
+        const quizzes =
+          quizIds.length > 0
+            ? await Quiz.findAll({
+                where: {
+                  id: {
+                    [Op.in]: quizIds,
+                  },
+                },
+              })
+            : [];
+
+        const quizMap =
+          new Map(
+            quizzes.map(
+              (quiz) => [
+                Number(quiz.id),
+                quiz,
+              ],
+            ),
+          );
+
+        const grants =
+          quizIds.length > 0
+            ? await QuizReattemptGrant.findAll({
+                where: {
+                  student_id: {
+                    [Op.in]: studentIds,
+                  },
+                  quiz_id: {
+                    [Op.in]: quizIds,
+                  },
+                },
+              })
+            : [];
+
+        const grantMap =
+          new Map();
+
+        for (const grant of grants) {
+          const key =
+            `${grant.student_id}:${grant.quiz_id}`;
+
+          grantMap.set(
+            key,
+            Number(
+              grantMap.get(key) ||
+                0,
+            ) +
+              Number(
+                grant.extra_attempts ||
+                  0,
+              ),
+          );
+        }
+
+        const grouped =
+          new Map();
+
+        for (const attempt of attempts) {
+          const key =
+            `${attempt.student_id}:${attempt.quiz_id}`;
+
+          if (!grouped.has(key)) {
+            grouped.set(
+              key,
+              [],
+            );
+          }
+
+          grouped.get(key).push(
+            attempt,
+          );
+        }
+
+        for (const [key, rows] of grouped.entries()) {
+          if (rows.some((row) => Boolean(row.passed))) {
+            continue;
+          }
+
+          const quizId =
+            Number(
+              key.split(":")[1],
+            );
+
+          const quiz =
+            quizMap.get(quizId);
+
+          if (!quiz) {
+            continue;
+          }
+
+          const totalAllowed =
+            Number(
+              quiz.attempts_allowed ||
+                1,
+            ) +
+            Number(
+              grantMap.get(key) ||
+                0,
+            );
+
+          if (rows.length >= totalAllowed) {
+            failedExhausted += 1;
+          }
+        }
+      }
+
+      const assessmentsPending =
+        Math.max(
+          totalStudents -
+            assessmentsSubmitted,
+          0,
+        );
+
+      ok(
+        res,
+        {
+          mentor: {
+            id: mentor.id,
+            name: mentor.name,
+            employee_id:
+              mentor.employee_id,
+            designation:
+              mentor.designation,
+            department:
+              mentor.department,
+            domain_id:
+              mentor.domain_id,
+            college_id:
+              mentor.college_id,
+          },
+
+          summary: {
+            total_students:
+              totalStudents,
+            active_students:
+              activeStudents,
+            completed_students:
+              completedStudents,
+            average_progress:
+              averageProgress,
+            pending_reviews:
+              pendingReviews,
+            assessments_submitted:
+              assessmentsSubmitted,
+            assessments_pending:
+              assessmentsPending,
+            failed_quiz_exhausted:
+              failedExhausted,
+          },
+
+          recent_students:
+            students.slice(0, 6),
+        },
+        "Mentor dashboard fetched successfully",
       );
     },
   );

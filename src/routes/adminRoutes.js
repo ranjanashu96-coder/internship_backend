@@ -115,6 +115,19 @@ import {
 } from "../controllers/adminReportController.js";
 
 
+import {
+  listAdminRoutines,
+  createRoutine,
+  updateRoutine,
+  deleteRoutine,
+} from "../controllers/routineController.js";
+
+
+
+import {
+  listAdminQuizReattempts,
+  grantAdminQuizReattempt,
+} from "../controllers/quizReattemptController.js";
 
 const router = Router();
 
@@ -591,6 +604,60 @@ router.post(
 router.post(
   "/bulk/:jobUuid/retry",
   retryBulkJob,
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Routine Management
+|--------------------------------------------------------------------------
+*/
+
+const routineUpload = upload(
+  "routines",
+  [
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ],
+  10 * 1024 * 1024,
+);
+
+router.get("/routines", listAdminRoutines);
+
+router.post(
+  "/routines",
+  routineUpload.single("routine_file"),
+  createRoutine,
+);
+
+router.put(
+  "/routines/:id",
+  routineUpload.single("routine_file"),
+  updateRoutine,
+);
+
+router.delete(
+  "/routines/:id",
+  deleteRoutine,
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Quiz Reattempt Management
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/quiz-reattempts",
+  listAdminQuizReattempts,
+);
+
+router.post(
+  "/students/:studentId/quizzes/:quizId/reattempt",
+  grantAdminQuizReattempt,
 );
 
 export default router;

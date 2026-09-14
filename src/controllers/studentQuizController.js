@@ -6,6 +6,7 @@ import {
   Quiz,
   QuizAttempt,
   QuizAnswer,
+  QuizReattemptGrant,
   Chapter,
   Module,
   Student,
@@ -24,6 +25,26 @@ const ATTEMPT_STATUS = {
   IN_PROGRESS: "in_progress",
   SUBMITTED: "submitted",
   EXPIRED: "expired",
+};
+
+const getGrantedExtraAttempts = async (
+  studentId,
+  quizId,
+  transaction = null,
+) => {
+  const total =
+    await QuizReattemptGrant.sum(
+      "extra_attempts",
+      {
+        where: {
+          student_id: studentId,
+          quiz_id: quizId,
+        },
+        transaction,
+      },
+    );
+
+  return Number(total || 0);
 };
 
 /*
@@ -622,10 +643,20 @@ export const getQuizDetails = async (
       activeAttempt = null;
     }
 
-    const attemptsAllowed =
+    const baseAttemptsAllowed =
       Number(
         quiz.attempts_allowed || 1,
       );
+
+    const extraAttempts =
+      await getGrantedExtraAttempts(
+        studentId,
+        quizId,
+      );
+
+    const attemptsAllowed =
+      baseAttemptsAllowed +
+      extraAttempts;
 
     return sendSuccess(
       res,
@@ -839,10 +870,21 @@ export const startQuiz = async (
         transaction,
       });
 
-    const attemptsAllowed =
+    const baseAttemptsAllowed =
       Number(
         quiz.attempts_allowed || 1,
       );
+
+    const extraAttempts =
+      await getGrantedExtraAttempts(
+        studentId,
+        quizId,
+        transaction,
+      );
+
+    const attemptsAllowed =
+      baseAttemptsAllowed +
+      extraAttempts;
 
     if (
       usedAttempts >=

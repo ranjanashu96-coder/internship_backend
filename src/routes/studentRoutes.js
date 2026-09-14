@@ -15,6 +15,9 @@ import {
   listMyQuizAttempts,
 } from "../controllers/studentQuizController.js";
 
+import { listStudentRoutines } from "../controllers/routineController.js";
+
+
 import {
   resourceProgress,
   resourceHeartbeat,
@@ -257,6 +260,11 @@ r.get(
 r.get(
   "/attendance",
   c.getAttendance,
+);
+
+r.get(
+  "/routines",
+  listStudentRoutines,
 );
 
 /*
