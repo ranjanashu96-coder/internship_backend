@@ -10,6 +10,7 @@ import {
   ChapterResource,
   Assignment,
   Quiz,
+   ChapterCompletion, 
 } from "../models/index.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -1616,54 +1617,39 @@ export const updateChapter =
     },
   );
 
-export const deleteChapter =
-  asyncHandler(
-    async (req, res) => {
-      const chapter =
-        await Chapter.findByPk(
-          req.params.id,
-        );
+export const deleteChapter = asyncHandler(async (req, res) => {
+  const chapter = await Chapter.findByPk(req.params.id);
 
-      if (!chapter) {
-        throw new AppError(
-          "Chapter not found",
-          404,
-        );
-      }
+  if (!chapter) {
+    throw new AppError("Chapter not found", 404);
+  }
 
-      const assignmentCount =
-        await Assignment.count({
-          where: {
-            chapter_id:
-              chapter.id,
-          },
-        });
+  // Business rule: assignments hain toh delete mat karo
+  const assignmentCount = await Assignment.count({
+    where: { chapter_id: chapter.id },
+  });
 
-      if (
-        assignmentCount > 0
-      ) {
-        throw new AppError(
-          "Chapter cannot be deleted because assignments are linked to it",
-          409,
-        );
-      }
+  if (assignmentCount > 0) {
+    throw new AppError(
+      "Chapter cannot be deleted because assignments are linked to it",
+      409,
+    );
+  }
 
-      const contentUrl =
-        chapter.content_url;
+  const contentUrl = chapter.content_url;
 
-      await chapter.destroy();
+  // ✅ Child rows pehle delete karo (FK error fix)
+  await ChapterCompletion.destroy({
+    where: { chapter_id: chapter.id },
+  });
 
-      removeStoredChapterFile(
-        contentUrl,
-      );
+  // Ab chapter delete karo
+  await chapter.destroy();
 
-      return ok(
-        res,
-        {},
-        "Chapter deleted successfully",
-      );
-    },
-  );
+  removeStoredChapterFile(contentUrl);
+
+  return ok(res, {}, "Chapter deleted successfully");
+});
 
 /*
 |--------------------------------------------------------------------------
