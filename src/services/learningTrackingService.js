@@ -13,7 +13,7 @@ export const VIDEO_COMPLETION_PERCENT = 95;
 export const LIVE_ATTENDANCE_PERCENT = 80;
 
 // ✅ No-video chapter me minimum 10 minutes
-export const NON_VIDEO_REQUIRED_SECONDS = 10 * 60;
+export const NON_VIDEO_REQUIRED_SECONDS = 120 * 60;
 
 const percentage = (done, total) => {
   const d = Number(done || 0);
@@ -37,6 +37,73 @@ export const getChapterLearningRequirements =
     studentId,
     chapterId,
   }) => {
+
+    const totalResourceCount =
+      await ChapterResource.count({
+        where: {
+          chapter_id: chapterId,
+          status: "active",
+        },
+      });
+
+    // Live class bhi ek resource type hai
+    const totalLiveCount =
+      await LiveClass.count({
+        where: {
+          chapter_id: chapterId,
+          status: {
+            [Op.ne]: "cancelled",
+          },
+        },
+      });
+
+    const totalItems =
+      totalResourceCount + totalLiveCount;
+
+    if (totalItems === 0) {
+      return {
+        chapter_id: Number(chapterId),
+
+        video_completion_required_percentage:
+          VIDEO_COMPLETION_PERCENT,
+
+        live_attendance_required_percentage:
+          LIVE_ATTENDANCE_PERCENT,
+
+        non_video_required_seconds:
+          NON_VIDEO_REQUIRED_SECONDS,
+
+        has_video: false,
+
+        has_resources: false,
+
+        // 🔴 Ye frontend use karega button hide karne ke liye
+        can_mark_complete: false,
+
+        is_empty_chapter: true,
+
+        reason:
+          "Is chapter me koi resource nahi hai, isliye mark complete available nahi hai.",
+
+        videos: [],
+
+        chapter_engagement: null,
+
+        live_classes: [],
+
+        summary: {
+          total_video_resources: 0,
+          completed_video_resources: 0,
+          total_live_classes: 0,
+          completed_live_classes: 0,
+          videos_complete: false,
+          engagement_complete: false,
+          live_classes_complete: false,
+          learning_requirements_complete: false,
+        },
+      };
+    }
+
     /*
     |--------------------------------------------------------------------------
     | 1. VIDEO REQUIREMENTS
@@ -416,29 +483,31 @@ export const getChapterLearningRequirements =
       liveComplete;
 
     return {
-      chapter_id:
-        Number(chapterId),
+     chapter_id: Number(chapterId),
 
-      video_completion_required_percentage:
-        VIDEO_COMPLETION_PERCENT,
+  video_completion_required_percentage:
+    VIDEO_COMPLETION_PERCENT,
 
-      live_attendance_required_percentage:
-        LIVE_ATTENDANCE_PERCENT,
+  live_attendance_required_percentage:
+    LIVE_ATTENDANCE_PERCENT,
 
-      non_video_required_seconds:
-        NON_VIDEO_REQUIRED_SECONDS,
+  non_video_required_seconds:
+    NON_VIDEO_REQUIRED_SECONDS,
 
-      has_video:
-        hasVideo,
+  has_video: hasVideo,
 
-      videos:
-        videoRequirements,
+  has_resources: true,
 
-      chapter_engagement:
-        chapterEngagement,
+  // 🟢 Resources hain toh mark complete allowed hai
+  can_mark_complete: true,
 
-      live_classes:
-        liveRequirements,
+  is_empty_chapter: false,
+
+  videos: videoRequirements,
+
+  chapter_engagement: chapterEngagement,
+
+  live_classes: liveRequirements,
 
       summary: {
         total_video_resources:
@@ -461,6 +530,8 @@ export const getChapterLearningRequirements =
 
         videos_complete:
           videosComplete,
+
+         can_mark_complete: true,
 
         engagement_complete:
           engagementComplete,
@@ -492,6 +563,20 @@ export const assertChapterLearningRequirements =
           chapterId,
         },
       );
+
+        /*
+    |--------------------------------------------------------------------------
+    | EMPTY CHAPTER -> BLOCK
+    |--------------------------------------------------------------------------
+    */
+
+    if (requirements.is_empty_chapter) {
+      throw new AppError(
+        "Is chapter me koi resource nahi hai, isliye ise complete nahi kiya ja sakta.",
+        409,
+        { requirements },
+      );
+    }
 
     const pending = [];
 

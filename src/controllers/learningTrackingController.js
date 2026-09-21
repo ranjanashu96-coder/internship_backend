@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { Op } from "sequelize"; 
 import {
   Student,
   Module,
@@ -22,7 +23,7 @@ const VIDEO_MAX_GAP = 20;
 const LIVE_MAX_CREDIT = 45;
 const CHAPTER_MAX_CREDIT = 15;
 const NON_VIDEO_REQUIRED_SECONDS =
-  10 * 60;
+  120 * 60;
 
   export const chapterEngagementHeartbeat =
   asyncHandler(async (req, res) => {
@@ -65,22 +66,77 @@ const NON_VIDEO_REQUIRED_SECONDS =
      * 10 minute timer only applies
      * when chapter has NO video.
      */
-    const videoCount =
-      await ChapterResource.count({
-        where: {
-          chapter_id: chapterId,
-          resource_type: "video",
-          status: "active",
-        },
-      });
+   /*
+ * Chapter me total active resources
+ * (video, pdf, text, link, etc.)
+ */
+const totalResources =
+  await ChapterResource.count({
+    where: {
+      chapter_id: chapterId,
+      status: "active",
+    },
+  });
 
-    if (videoCount > 0) {
-      return ok(res, {
-        required: false,
-        reason:
-          "Video tracking applies to this chapter",
-      });
-    }
+/*
+ * Chapter se linked live classes
+ */
+const totalLiveClasses =
+  await LiveClass.count({
+    where: {
+      chapter_id: chapterId,
+      status: { [Op.ne]: "cancelled" },
+    },
+  });
+
+/*
+|--------------------------------------------------------------------------
+| EMPTY CHAPTER
+|--------------------------------------------------------------------------
+| Koi resource nahi hai:
+| na video, na pdf, na live class.
+|
+| Aise chapter me heartbeat tracking nahi chalegi
+| aur mark complete bhi nahi hoga.
+*/
+
+if (totalResources + totalLiveClasses === 0) {
+  return ok(res, {
+    chapter_id: chapterId,
+
+    required: false,
+
+    can_mark_complete: false,
+
+    is_empty_chapter: true,
+
+    is_completed: false,
+
+    reason:
+      "Is chapter me koi resource nahi hai, isliye engagement tracking nahi chalegi.",
+  });
+}
+
+/*
+ * Agar video hai toh
+ * non-video 10 minute timer apply nahi hoga.
+ */
+const videoCount =
+  await ChapterResource.count({
+    where: {
+      chapter_id: chapterId,
+      resource_type: "video",
+      status: "active",
+    },
+  });
+
+if (videoCount > 0) {
+  return ok(res, {
+    required: false,
+    reason:
+      "Video tracking applies to this chapter",
+  });
+}
 
     const visible =
       req.body.visible !== false;
@@ -382,7 +438,96 @@ export const leaveLiveClass = asyncHandler(async (req, res) => {
 export const chapterRequirements = asyncHandler(async (req, res) => {
   const student = await getStudent(req);
   const chapterId = Number(req.params.chapterId);
-  const chapter = await Chapter.findOne({ where: { id: chapterId }, include: [{ model: Module, required: true, where: { domain_id: student.domain_id }, attributes: ["id"] }] });
-  if (!chapter) throw new AppError("Chapter not found for your domain", 404);
-  return ok(res, await getChapterLearningRequirements({ studentId: student.id, chapterId }));
+
+  const chapter = await Chapter.findOne({
+    where: { id: chapterId },
+    include: [
+      {
+        model: Module,
+        required: true,
+        where: { domain_id: student.domain_id },
+        attributes: ["id"],
+      },
+    ],
+  });
+
+  if (!chapter) {
+    throw new AppError("Chapter not found for your domain", 404);
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | EMPTY CHAPTER CHECK
+  |--------------------------------------------------------------------------
+  | Agar chapter me koi bhi active resource nahi hai
+  | (na video, na pdf, na text, na link, na live class)
+  | toh mark complete available hi nahi hoga.
+  */
+
+  const totalResources = await ChapterResource.count({
+    where: {
+      chapter_id: chapterId,
+      status: "active",
+    },
+  });
+
+  const totalLiveClasses = await LiveClass.count({
+    where: {
+      chapter_id: chapterId,
+      status: { [Op.ne]: "cancelled" },
+    },
+  });
+
+  if (totalResources + totalLiveClasses === 0) {
+    return ok(res, {
+      chapter_id: chapterId,
+
+      has_resources: false,
+
+      // 🔴 Ye flag frontend use karega button hide karne ke liye
+      can_mark_complete: false,
+
+      is_empty_chapter: true,
+
+      is_completed: false,
+
+      reason:
+        "Is chapter me abhi koi resource nahi hai, isliye mark complete available nahi hai.",
+
+      videos: [],
+      chapter_engagement: null,
+      live_classes: [],
+
+      summary: {
+        total_video_resources: 0,
+        completed_video_resources: 0,
+        total_live_classes: 0,
+        completed_live_classes: 0,
+        videos_complete: false,
+        engagement_complete: false,
+        live_classes_complete: false,
+        learning_requirements_complete: false,
+      },
+    });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | NORMAL CHAPTER
+  |--------------------------------------------------------------------------
+  */
+
+  const requirements = await getChapterLearningRequirements({
+    studentId: student.id,
+    chapterId,
+  });
+
+  // Resources hain toh mark complete allowed
+  return ok(res, {
+    ...requirements,
+
+    has_resources: true,
+    can_mark_complete: true,
+    is_empty_chapter: false,
+  });
 });
