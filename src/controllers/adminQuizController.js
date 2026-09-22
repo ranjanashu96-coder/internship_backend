@@ -1,12 +1,12 @@
 import { Op } from "sequelize";
-
+import fs from "fs";
 import {
   Quiz,
   Chapter,
   Module,
   Domain,
 } from "../models/index.js";
-
+import { parseQuizExcel } from "../services/quizExcelImportService.js";
 /*
 |--------------------------------------------------------------------------
 | Constants
@@ -1329,6 +1329,182 @@ export const deleteQuiz = async (
       },
     );
   } catch (error) {
+    next(error);
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
+| Import Quiz From Excel
+|--------------------------------------------------------------------------
+*/
+
+export const importQuizFromExcel = async (
+  req,
+  res,
+  next,
+) => {
+  try {
+    if (!req.file) {
+      throw createError(
+        "Excel file is required",
+        422,
+      );
+    }
+
+    const body = req.body || {};
+
+    const chapterId = parsePositiveInteger(
+      body.chapter_id,
+      "Chapter ID",
+    );
+
+    const title = String(body.title || "").trim();
+
+    if (!title) {
+      throw createError(
+        "Quiz title is required",
+        422,
+      );
+    }
+
+    // Chapter verify
+    const chapter = await Chapter.findByPk(chapterId);
+
+    if (!chapter) {
+      throw createError("Chapter not found", 404);
+    }
+
+    // Duplicate quiz check
+    const existingQuiz = await Quiz.findOne({
+      where: { chapter_id: chapterId },
+    });
+
+    if (existingQuiz) {
+      throw createError(
+        "A quiz already exists for this chapter",
+        409,
+      );
+    }
+
+    // Excel parse karo
+    let parsed;
+
+    try {
+      parsed = parseQuizExcel(req.file.path);
+    } finally {
+      // File delete karo — parsing ke baad zaroorat nahi
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+    }
+
+    if (parsed.questions.length === 0) {
+      throw createError(
+        `No valid questions found. Errors: ${parsed.errors
+          .slice(0, 5)
+          .map((e) => `Row ${e.row}: ${e.message}`)
+          .join("; ")}`,
+        422,
+      );
+    }
+
+    // Optional settings
+    const passingScore = parseDecimal(
+      body.passing_score,
+      "Passing score",
+      {
+        min: 0,
+        max: 100,
+        defaultValue: 60,
+      },
+    );
+
+    const attemptsAllowed = parsePositiveInteger(
+      body.attempts_allowed ?? 3,
+      "Attempts allowed",
+    );
+
+    let timeLimitMinutes = null;
+
+    if (
+      body.time_limit_minutes !== undefined &&
+      body.time_limit_minutes !== null &&
+      body.time_limit_minutes !== ""
+    ) {
+      timeLimitMinutes = parsePositiveInteger(
+        body.time_limit_minutes,
+        "Time limit",
+      );
+    }
+
+    const status = body.status
+      ? String(body.status).trim()
+      : "active";
+
+    if (!VALID_STATUSES.includes(status)) {
+      throw createError("Invalid quiz status", 422);
+    }
+
+    const totalMarks = calculateTotalMarks(parsed.questions);
+
+    const quiz = await Quiz.create({
+      chapter_id: chapterId,
+      title,
+      description: body.description
+        ? String(body.description).trim()
+        : null,
+      questions_json: parsed.questions,
+      passing_score: passingScore,
+      total_marks: totalMarks,
+      attempts_allowed: attemptsAllowed,
+      time_limit_minutes: timeLimitMinutes,
+      randomize_questions: parseBoolean(
+        body.randomize_questions,
+        false,
+      ),
+      show_result_immediately: parseBoolean(
+        body.show_result_immediately,
+        true,
+      ),
+      status,
+    });
+
+    const createdQuiz = await Quiz.findByPk(quiz.id, {
+      include: quizChapterInclude,
+    });
+
+    return sendSuccess(
+      res,
+      201,
+      `Quiz imported successfully with ${parsed.questions.length} questions`,
+      {
+        quiz: createdQuiz,
+        import_summary: {
+          total_rows: parsed.totalRows,
+          imported_questions: parsed.validCount,
+          skipped_rows: parsed.errorCount,
+          errors: parsed.errors,
+        },
+      },
+    );
+  } catch (error) {
+    // File cleanup on error
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    if (
+      error.name === "SequelizeUniqueConstraintError"
+    ) {
+      return next(
+        createError(
+          "A quiz already exists for this chapter",
+          409,
+        ),
+      );
+    }
+
     next(error);
   }
 };

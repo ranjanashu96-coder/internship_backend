@@ -44,6 +44,7 @@ import {
   createQuiz,
   updateQuiz,
   deleteQuiz,
+  importQuizFromExcel, 
 } from "../controllers/adminQuizController.js";
 
 import {
@@ -521,6 +522,18 @@ router.get(
 router.get(
   "/quizzes/:id",
   getQuizById,
+);
+
+router.post(
+  "/quizzes/import",
+  upload(
+    "quiz-excel",
+    [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+    ],
+  ).single("file"),
+  importQuizFromExcel,
 );
 
 router.post(
