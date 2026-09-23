@@ -2,6 +2,8 @@ import { Op } from "sequelize";
 import {
   ChapterResource,
   LiveClass,
+   Quiz,
+  QuizAttempt,
   StudentResourceProgress,
   StudentLiveClassProgress,
   StudentChapterEngagement,
@@ -578,6 +580,46 @@ export const assertChapterLearningRequirements =
       );
     }
 
+    /*
+|--------------------------------------------------------------------------
+| QUIZ CHECK
+|--------------------------------------------------------------------------
+| Agar chapter me quiz hai aur student ne pass nahi kiya,
+| toh chapter complete nahi ho sakta.
+*/
+
+const quiz = await Quiz.findOne({
+  where: {
+    chapter_id: chapterId,
+    status: "active",
+  },
+  attributes: ["id", "title"],
+});
+
+if (quiz) {
+  const passedAttempt = await QuizAttempt.findOne({
+    where: {
+      student_id: studentId,
+      quiz_id: quiz.id,
+      status: "submitted",
+      passed: true,
+    },
+    attributes: ["id"],
+  });
+
+  if (!passedAttempt) {
+    throw new AppError(
+      `Pehle quiz "${quiz.title}" pass karo, tabhi chapter complete hoga.`,
+      409,
+      {
+        quiz_required: true,
+        quiz_id: quiz.id,
+        quiz_title: quiz.title,
+      },
+    );
+  }
+}
+
     const pending = [];
 
     /*
@@ -604,28 +646,6 @@ export const assertChapterLearningRequirements =
     |--------------------------------------------------------------------------
     */
 
-    if (
-      requirements
-        .chapter_engagement &&
-      !requirements
-        .chapter_engagement
-        .is_completed
-    ) {
-      const remainingSeconds =
-        requirements
-          .chapter_engagement
-          .remaining_seconds;
-
-      const remainingMinutes =
-        Math.ceil(
-          remainingSeconds /
-            60,
-        );
-
-      pending.push(
-        `Spend ${remainingMinutes} more minute(s) on this chapter`,
-      );
-    }
 
     /*
     |--------------------------------------------------------------------------
