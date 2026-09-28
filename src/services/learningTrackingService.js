@@ -2,686 +2,194 @@ import { Op } from "sequelize";
 import {
   ChapterResource,
   LiveClass,
-   Quiz,
+  Quiz,
   QuizAttempt,
-  StudentResourceProgress,
-  StudentLiveClassProgress,
-  StudentChapterEngagement,
 } from "../models/index.js";
 
 import { AppError } from "../utils/response.js";
 
-export const VIDEO_COMPLETION_PERCENT = 95;
-export const LIVE_ATTENDANCE_PERCENT = 80;
-
-// ✅ No-video chapter me minimum 10 minutes
-export const NON_VIDEO_REQUIRED_SECONDS = 120 * 60;
-
-const percentage = (done, total) => {
-  const d = Number(done || 0);
-  const t = Number(total || 0);
-
-  if (t <= 0) return 0;
-
-  return Number(
-    Math.min(
-      100,
-      Math.max(
-        0,
-        (d / t) * 100,
-      ),
-    ).toFixed(2),
-  );
-};
-
-export const getChapterLearningRequirements =
-  async ({
-    studentId,
-    chapterId,
-  }) => {
-
-    const totalResourceCount =
-      await ChapterResource.count({
-        where: {
-          chapter_id: chapterId,
-          status: "active",
-        },
-      });
-
-    // Live class bhi ek resource type hai
-    const totalLiveCount =
-      await LiveClass.count({
-        where: {
-          chapter_id: chapterId,
-          status: {
-            [Op.ne]: "cancelled",
-          },
-        },
-      });
-
-    const totalItems =
-      totalResourceCount + totalLiveCount;
-
-    if (totalItems === 0) {
-      return {
-        chapter_id: Number(chapterId),
-
-        video_completion_required_percentage:
-          VIDEO_COMPLETION_PERCENT,
-
-        live_attendance_required_percentage:
-          LIVE_ATTENDANCE_PERCENT,
-
-        non_video_required_seconds:
-          NON_VIDEO_REQUIRED_SECONDS,
-
-        has_video: false,
-
-        has_resources: false,
-
-        // 🔴 Ye frontend use karega button hide karne ke liye
-        can_mark_complete: false,
-
-        is_empty_chapter: true,
-
-        reason:
-          "Is chapter me koi resource nahi hai, isliye mark complete available nahi hai.",
-
-        videos: [],
-
-        chapter_engagement: null,
-
-        live_classes: [],
-
-        summary: {
-          total_video_resources: 0,
-          completed_video_resources: 0,
-          total_live_classes: 0,
-          completed_live_classes: 0,
-          videos_complete: false,
-          engagement_complete: false,
-          live_classes_complete: false,
-          learning_requirements_complete: false,
-        },
-      };
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | 1. VIDEO REQUIREMENTS
-    |--------------------------------------------------------------------------
-    */
-
-    const videos =
-      await ChapterResource.findAll({
-        where: {
-          chapter_id: chapterId,
-          resource_type: "video",
-          status: "active",
-        },
-
-        order: [
-          ["sort_order", "ASC"],
-          ["id", "ASC"],
-        ],
-      });
-
-    const videoIds =
-      videos.map((v) =>
-        Number(v.id),
-      );
-
-    const videoRows =
-      videoIds.length
-        ? await StudentResourceProgress.findAll(
-            {
-              where: {
-                student_id:
-                  studentId,
-
-                resource_id: {
-                  [Op.in]:
-                    videoIds,
-                },
-              },
-            },
-          )
-        : [];
-
-    const videoMap =
-      new Map(
-        videoRows.map(
-          (r) => [
-            Number(
-              r.resource_id,
-            ),
-            r,
-          ],
-        ),
-      );
-
-    const videoRequirements =
-      videos.map(
-        (video) => {
-          const row =
-            videoMap.get(
-              Number(video.id),
-            );
-
-          const duration =
-            Number(
-              row?.duration_seconds ||
-                video.duration_seconds ||
-                0,
-            );
-
-          const watched =
-            Math.min(
-              duration ||
-                Number.MAX_SAFE_INTEGER,
-
-              Number(
-                row?.watched_seconds ||
-                  0,
-              ),
-            );
-
-          const progress =
-            percentage(
-              watched,
-              duration,
-            );
-
-          return {
-            resource_id:
-              Number(video.id),
-
-            title:
-              video.title,
-
-            duration_seconds:
-              duration,
-
-            watched_seconds:
-              Number(
-                watched.toFixed(
-                  2,
-                ),
-              ),
-
-            last_position_seconds:
-              Number(
-                row?.last_position_seconds ||
-                  0,
-              ),
-
-            progress_percentage:
-              progress,
-
-            is_completed:
-              Boolean(
-                row?.is_completed,
-              ) ||
-              (
-                duration > 0 &&
-                progress >=
-                  VIDEO_COMPLETION_PERCENT
-              ),
-          };
-        },
-      );
-
-    /*
-    |--------------------------------------------------------------------------
-    | 2. NO-VIDEO CHAPTER ENGAGEMENT
-    |--------------------------------------------------------------------------
-    |
-    | Agar chapter me ek bhi active video nahi hai,
-    | tab student ko 10 minute chapter par rehna hoga.
-    |
-    | Agar video hai:
-    | engagement timer ignore hoga.
-    |--------------------------------------------------------------------------
-    */
-
-    const hasVideo =
-      videoRequirements.length >
-      0;
-
-    let chapterEngagement =
-      null;
-
-    if (!hasVideo) {
-      const engagementRow =
-        await StudentChapterEngagement.findOne(
-          {
-            where: {
-              student_id:
-                studentId,
-
-              chapter_id:
-                chapterId,
-            },
-          },
-        );
-
-      const engagedSeconds =
-        Number(
-          engagementRow
-            ?.engaged_seconds ||
-            0,
-        );
-
-      const engagementCompleted =
-        Boolean(
-          engagementRow
-            ?.is_completed,
-        ) ||
-        engagedSeconds >=
-          NON_VIDEO_REQUIRED_SECONDS;
-
-      chapterEngagement = {
-        required_seconds:
-          NON_VIDEO_REQUIRED_SECONDS,
-
-        engaged_seconds:
-          engagedSeconds,
-
-        remaining_seconds:
-          Math.max(
-            NON_VIDEO_REQUIRED_SECONDS -
-              engagedSeconds,
-            0,
-          ),
-
-        progress_percentage:
-          percentage(
-            engagedSeconds,
-            NON_VIDEO_REQUIRED_SECONDS,
-          ),
-
-        is_completed:
-          engagementCompleted,
-      };
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | 3. LIVE CLASS REQUIREMENTS
-    |--------------------------------------------------------------------------
-    */
-
-    // Sirf chapter-linked live class chapter ko block karegi.
-    // Module/domain-only live class tracking chalegi,
-    // lekin wo kisi specific chapter ko block nahi karegi.
-
-    const liveClasses =
-      await LiveClass.findAll({
-        where: {
-          chapter_id:
-            chapterId,
-
-          status: {
-            [Op.ne]:
-              "cancelled",
-          },
-        },
-
-        order: [
-          [
-            "scheduled_at",
-            "ASC",
-          ],
-        ],
-      });
-
-    const liveIds =
-      liveClasses.map(
-        (v) =>
-          Number(v.id),
-      );
-
-    const liveRows =
-      liveIds.length
-        ? await StudentLiveClassProgress.findAll(
-            {
-              where: {
-                student_id:
-                  studentId,
-
-                live_class_id:
-                  {
-                    [Op.in]:
-                      liveIds,
-                  },
-              },
-            },
-          )
-        : [];
-
-    const liveMap =
-      new Map(
-        liveRows.map(
-          (r) => [
-            Number(
-              r.live_class_id,
-            ),
-            r,
-          ],
-        ),
-      );
-
-    const liveRequirements =
-      liveClasses.map(
-        (liveClass) => {
-          const row =
-            liveMap.get(
-              Number(
-                liveClass.id,
-              ),
-            );
-
-          const duration =
-            Math.max(
-              1,
-              Number(
-                liveClass.duration_minutes ||
-                  60,
-              ),
-            ) * 60;
-
-          const attended =
-            Math.min(
-              duration,
-
-              Number(
-                row?.attended_seconds ||
-                  0,
-              ),
-            );
-
-          const progress =
-            percentage(
-              attended,
-              duration,
-            );
-
-          return {
-            live_class_id:
-              Number(
-                liveClass.id,
-              ),
-
-            title:
-              liveClass.title,
-
-            scheduled_at:
-              liveClass.scheduled_at,
-
-            duration_seconds:
-              duration,
-
-            attended_seconds:
-              attended,
-
-            attendance_percentage:
-              progress,
-
-            is_completed:
-              Boolean(
-                row?.is_completed,
-              ) ||
-              progress >=
-                LIVE_ATTENDANCE_PERCENT,
-          };
-        },
-      );
-
-    /*
-    |--------------------------------------------------------------------------
-    | 4. FINAL REQUIREMENT STATUS
-    |--------------------------------------------------------------------------
-    */
-
-    const videosComplete =
-      videoRequirements.every(
-        (x) =>
-          x.is_completed,
-      );
-
-    const liveComplete =
-      liveRequirements.every(
-        (x) =>
-          x.is_completed,
-      );
-
-    /*
-     * Agar video hai:
-     * engagement automatically true.
-     *
-     * Agar video nahi hai:
-     * 10-minute engagement required.
-     */
-    const engagementComplete =
-      hasVideo
-        ? true
-        : Boolean(
-            chapterEngagement
-              ?.is_completed,
-          );
-
-    /*
-     * FINAL:
-     *
-     * VIDEO chapter:
-     * video + live
-     *
-     * NO VIDEO chapter:
-     * 10 min + live
-     */
-    const learningRequirementsComplete =
-      videosComplete &&
-      engagementComplete &&
-      liveComplete;
-
+/*
+|--------------------------------------------------------------------------
+| SIMPLE RULES
+|--------------------------------------------------------------------------
+| Chapter complete karne ke liye sirf 2 cheezein:
+|
+| 1. Chapter me koi bhi active resource ho
+|    (video, pdf, link, text — kuch bhi)
+|    YA koi live class ho.
+|
+| 2. Agar chapter me quiz hai, toh student ne pass kiya ho.
+|
+| Bas. Na video tracking, na live attendance tracking,
+| na 120 minute timer, na engagement.
+*/
+
+export const getChapterLearningRequirements = async ({
+  studentId,
+  chapterId,
+}) => {
+  /*
+  |--------------------------------------------------------------------------
+  | 1. RESOURCE COUNT
+  |--------------------------------------------------------------------------
+  */
+  const totalResources = await ChapterResource.count({
+    where: {
+      chapter_id: chapterId,
+      status: "active",
+    },
+  });
+
+  const totalLiveClasses = await LiveClass.count({
+    where: {
+      chapter_id: chapterId,
+      status: { [Op.ne]: "cancelled" },
+    },
+  });
+
+  const totalItems = totalResources + totalLiveClasses;
+
+  /*
+  |--------------------------------------------------------------------------
+  | EMPTY CHAPTER -> can_mark_complete = false
+  |--------------------------------------------------------------------------
+  */
+  if (totalItems === 0) {
     return {
-     chapter_id: Number(chapterId),
+      chapter_id: Number(chapterId),
 
-  video_completion_required_percentage:
-    VIDEO_COMPLETION_PERCENT,
+      has_resources: false,
+      can_mark_complete: false,
+      is_empty_chapter: true,
 
-  live_attendance_required_percentage:
-    LIVE_ATTENDANCE_PERCENT,
-
-  non_video_required_seconds:
-    NON_VIDEO_REQUIRED_SECONDS,
-
-  has_video: hasVideo,
-
-  has_resources: true,
-
-  // 🟢 Resources hain toh mark complete allowed hai
-  can_mark_complete: true,
-
-  is_empty_chapter: false,
-
-  videos: videoRequirements,
-
-  chapter_engagement: chapterEngagement,
-
-  live_classes: liveRequirements,
-
-      summary: {
-        total_video_resources:
-          videoRequirements.length,
-
-        completed_video_resources:
-          videoRequirements.filter(
-            (x) =>
-              x.is_completed,
-          ).length,
-
-        total_live_classes:
-          liveRequirements.length,
-
-        completed_live_classes:
-          liveRequirements.filter(
-            (x) =>
-              x.is_completed,
-          ).length,
-
-        videos_complete:
-          videosComplete,
-
-         can_mark_complete: true,
-
-        engagement_complete:
-          engagementComplete,
-
-        live_classes_complete:
-          liveComplete,
-
-        learning_requirements_complete:
-          learningRequirementsComplete,
-      },
+      reason:
+        "Is chapter me koi resource nahi hai, isliye mark complete available nahi hai.",
     };
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | 2. QUIZ CHECK
+  |--------------------------------------------------------------------------
+  | Agar chapter me active quiz hai,
+  | toh student ne pass kiya hona chahiye.
+  */
+  const quiz = await Quiz.findOne({
+    where: {
+      chapter_id: chapterId,
+      status: "active",
+    },
+    attributes: ["id", "title", "passing_score"],
+  });
+
+  let quizRequired = false;
+  let quizPassed = false;
+  let quizTitle = null;
+  let quizId = null;
+
+  if (quiz) {
+    quizRequired = true;
+    quizTitle = quiz.title;
+    quizId = quiz.id;
+
+    const passedAttempt = await QuizAttempt.findOne({
+      where: {
+        student_id: studentId,
+        quiz_id: quiz.id,
+        status: "submitted",
+        passed: true,
+      },
+      attributes: ["id"],
+    });
+
+    quizPassed = Boolean(passedAttempt);
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | 3. FINAL STATUS
+  |--------------------------------------------------------------------------
+  */
+  const learningRequirementsComplete =
+    totalItems > 0 && (!quizRequired || quizPassed);
+
+  return {
+    chapter_id: Number(chapterId),
+
+    has_resources: true,
+    can_mark_complete: true,
+    is_empty_chapter: false,
+
+    quiz: quiz
+      ? {
+          id: quizId,
+          title: quizTitle,
+          passing_score: Number(quiz.passing_score || 0),
+          required: quizRequired,
+          passed: quizPassed,
+        }
+      : null,
+
+    summary: {
+      total_resources: totalResources,
+      total_live_classes: totalLiveClasses,
+
+      quiz_required: quizRequired,
+      quiz_passed: quizPassed,
+
+      learning_requirements_complete: learningRequirementsComplete,
+    },
   };
+};
 
 /*
 |--------------------------------------------------------------------------
 | FINAL COMPLETION GUARD
 |--------------------------------------------------------------------------
 */
-
-export const assertChapterLearningRequirements =
-  async ({
+export const assertChapterLearningRequirements = async ({
+  studentId,
+  chapterId,
+}) => {
+  const requirements = await getChapterLearningRequirements({
     studentId,
     chapterId,
-  }) => {
-    const requirements =
-      await getChapterLearningRequirements(
-        {
-          studentId,
-          chapterId,
-        },
-      );
-
-        /*
-    |--------------------------------------------------------------------------
-    | EMPTY CHAPTER -> BLOCK
-    |--------------------------------------------------------------------------
-    */
-
-    if (requirements.is_empty_chapter) {
-      throw new AppError(
-        "Is chapter me koi resource nahi hai, isliye ise complete nahi kiya ja sakta.",
-        409,
-        { requirements },
-      );
-    }
-
-    /*
-|--------------------------------------------------------------------------
-| QUIZ CHECK
-|--------------------------------------------------------------------------
-| Agar chapter me quiz hai aur student ne pass nahi kiya,
-| toh chapter complete nahi ho sakta.
-*/
-
-const quiz = await Quiz.findOne({
-  where: {
-    chapter_id: chapterId,
-    status: "active",
-  },
-  attributes: ["id", "title"],
-});
-
-if (quiz) {
-  const passedAttempt = await QuizAttempt.findOne({
-    where: {
-      student_id: studentId,
-      quiz_id: quiz.id,
-      status: "submitted",
-      passed: true,
-    },
-    attributes: ["id"],
   });
 
-  if (!passedAttempt) {
+  /*
+  |--------------------------------------------------------------------------
+  | EMPTY CHAPTER -> BLOCK
+  |--------------------------------------------------------------------------
+  */
+  if (requirements.is_empty_chapter) {
     throw new AppError(
-      `Pehle quiz "${quiz.title}" pass karo, tabhi chapter complete hoga.`,
+      "Is chapter me koi resource nahi hai, isliye ise complete nahi kiya ja sakta.",
+      409,
+      { requirements },
+    );
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | QUIZ NOT PASSED -> BLOCK
+  |--------------------------------------------------------------------------
+  */
+  if (
+    requirements.quiz &&
+    requirements.quiz.required &&
+    !requirements.quiz.passed
+  ) {
+    throw new AppError(
+      `Pehle quiz "${requirements.quiz.title}" pass karo, tabhi chapter complete hoga.`,
       409,
       {
         quiz_required: true,
-        quiz_id: quiz.id,
-        quiz_title: quiz.title,
+        quiz_id: requirements.quiz.id,
+        quiz_title: requirements.quiz.title,
+        requirements,
       },
     );
   }
-}
 
-    const pending = [];
-
-    /*
-    |--------------------------------------------------------------------------
-    | VIDEO
-    |--------------------------------------------------------------------------
-    */
-
-    requirements.videos.forEach(
-      (x) => {
-        if (
-          !x.is_completed
-        ) {
-          pending.push(
-            `Watch "${x.title}" (${x.progress_percentage}% / ${VIDEO_COMPLETION_PERCENT}% required)`,
-          );
-        }
-      },
-    );
-
-    /*
-    |--------------------------------------------------------------------------
-    | NO-VIDEO 10 MINUTE REQUIREMENT
-    |--------------------------------------------------------------------------
-    */
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | LIVE CLASS
-    |--------------------------------------------------------------------------
-    */
-
-    requirements.live_classes.forEach(
-      (x) => {
-        if (
-          !x.is_completed
-        ) {
-          pending.push(
-            `Attend "${x.title}" (${x.attendance_percentage}% / ${LIVE_ATTENDANCE_PERCENT}% required)`,
-          );
-        }
-      },
-    );
-
-    /*
-    |--------------------------------------------------------------------------
-    | BLOCK CHAPTER COMPLETION
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      pending.length
-    ) {
-      throw new AppError(
-        `Complete learning requirements first: ${pending.join("; ")}`,
-        409,
-        {
-          requirements,
-        },
-      );
-    }
-
-    return requirements;
-  };
+  return requirements;
+};
