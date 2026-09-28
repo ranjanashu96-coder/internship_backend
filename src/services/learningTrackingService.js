@@ -15,13 +15,12 @@ import { AppError } from "../utils/response.js";
 | Chapter complete karne ke liye sirf 2 cheezein:
 |
 | 1. Chapter me koi bhi active resource ho
-|    (video, pdf, link, text — kuch bhi)
-|    YA koi live class ho.
+|    (video, pdf, link, text, live class — kuch bhi)
 |
 | 2. Agar chapter me quiz hai, toh student ne pass kiya ho.
 |
-| Bas. Na video tracking, na live attendance tracking,
-| na 120 minute timer, na engagement.
+| Live class JOIN/ATTEND karne ka system chalega (tracking hoga),
+| lekin 80% attendance mandatory NAHI hai chapter complete ke liye.
 */
 
 export const getChapterLearningRequirements = async ({
@@ -64,6 +63,16 @@ export const getChapterLearningRequirements = async ({
 
       reason:
         "Is chapter me koi resource nahi hai, isliye mark complete available nahi hai.",
+
+      quiz: null,
+
+      summary: {
+        total_resources: 0,
+        total_live_classes: 0,
+        quiz_required: false,
+        quiz_passed: false,
+        learning_requirements_complete: false,
+      },
     };
   }
 

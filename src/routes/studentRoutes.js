@@ -19,8 +19,7 @@ import { listStudentRoutines } from "../controllers/routineController.js";
 
 
 import {
-  resourceProgress,
-  resourceHeartbeat,
+  
   chapterRequirements,
   joinLiveClass,
   liveClassHeartbeat,
@@ -108,15 +107,15 @@ r.get(
   c.learning,
 );
 
-r.get(
-  "/learning/resources/:resourceId/progress",
-  resourceProgress,
-);
+// r.get(
+//   "/learning/resources/:resourceId/progress",
+//   resourceProgress,
+// );
 
-r.post(
-  "/learning/resources/:resourceId/heartbeat",
-  resourceHeartbeat,
-);
+// r.post(
+//   "/learning/resources/:resourceId/heartbeat",
+//   resourceHeartbeat,
+// );
 
 r.get(
   "/chapters/:chapterId/requirements",
