@@ -475,11 +475,11 @@ export const renderHtmlToPdf =
       */
 
       page.setDefaultTimeout(
-        60_000,
+        120_000,
       );
 
       page.setDefaultNavigationTimeout(
-        60_000,
+        120_000,
       );
 
       /*
@@ -491,13 +491,13 @@ export const renderHtmlToPdf =
       await page.setContent(
         html,
         {
-          waitUntil: [
+          waitUntil: 
             "domcontentloaded",
-            "networkidle0",
-          ],
-
           timeout:
             60_000,
+          
+
+         
         },
       );
 

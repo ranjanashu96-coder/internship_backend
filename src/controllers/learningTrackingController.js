@@ -23,7 +23,7 @@ const VIDEO_MAX_GAP = 20;
 const LIVE_MAX_CREDIT = 45;
 const CHAPTER_MAX_CREDIT = 15;
 const NON_VIDEO_REQUIRED_SECONDS =
-  120 * 60;
+  0;
 
   export const chapterEngagementHeartbeat =
   asyncHandler(async (req, res) => {

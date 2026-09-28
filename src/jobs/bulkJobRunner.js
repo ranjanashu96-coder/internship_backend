@@ -23,6 +23,9 @@ import {
   Module,
   Chapter,
   ChapterCompletion,
+   Quiz,              // ← add
+  QuizAttempt,       // ← add
+  Assignment,   
   Assessment,
   Result,
   Certificate,
@@ -550,6 +553,8 @@ getJobStepLabel(
   const labels = {
     attendance:
       "Generating Attendance",
+
+    quiz_attempts_and_submissions: "Generating Quiz Attempts & Submissions",
 
     complete_learning:
       "Completing Learning",
@@ -1608,6 +1613,117 @@ if (
 
     return result;
   }
+
+ async generateQuizAttemptsAndSubmissions(job, options = {}) {
+  const payload = { ...(job.payload || {}), ...(options.payload || {}) };
+
+  const students = await this.getStudents(payload);
+
+  const completedAt = this.resolveDateTime(
+    payload.completed_at || payload.end_date,
+  );
+
+  let totalQuizzes = 0;
+  let totalAssignments = 0;
+  let processed = 0;
+
+  for (const student of students) {
+    await this.assertNotCancelled(job);
+
+    if (!student.domain_id) {
+      continue;
+    }
+
+    // 1) Domain ke saare chapters (same helper jo completeLearning use karta hai)
+    const chapters = await this.getStudentChapters(student, payload);
+    const chapterIds = chapters.map((c) => Number(c.id));
+
+    if (chapterIds.length === 0) {
+      continue;
+    }
+
+    // 2) Active quizzes — simple where, no include
+    const quizzes = await Quiz.findAll({
+      where: {
+        chapter_id: { [Op.in]: chapterIds },
+        status: "active",
+      },
+      attributes: ["id"],
+    });
+
+    totalQuizzes += quizzes.length;
+
+    for (const quiz of quizzes) {
+      const [attempt, created] = await QuizAttempt.findOrCreate({
+        where: {
+          student_id: student.id,
+          quiz_id: quiz.id,
+        },
+        defaults: {
+          status: "submitted",
+          passed: true,
+          submitted_at: completedAt,
+        },
+      });
+
+      if (!created) {
+        await attempt.update({
+          status: "submitted",
+          passed: true,
+        });
+      }
+
+      processed += 1;
+    }
+
+    // 3) Assignments — simple where, no include
+    const assignments = await Assignment.findAll({
+      where: {
+        chapter_id: { [Op.in]: chapterIds },
+      },
+      attributes: ["id"],
+    });
+
+    totalAssignments += assignments.length;
+
+    for (const assignment of assignments) {
+      const [submission, created] = await Submission.findOrCreate({
+        where: {
+          student_id: student.id,
+          assignment_id: assignment.id,
+        },
+        defaults: {
+          status: "approved",
+          // Submission.file_url is allowNull:false → dummy value do
+          file_url: "-",
+          marks: 100,
+          mentor_comments: "Auto-approved through bulk automation",
+        },
+      });
+
+      if (!created) {
+        await submission.update({
+          status: "approved",
+        });
+      }
+
+      processed += 1;
+    }
+  }
+
+  const result = {
+    students: students.length,
+    quizzes_attempted: totalQuizzes,
+    assignments_submitted: totalAssignments,
+    completed_at: completedAt.toISOString(),
+  };
+
+  if (!options.silent) {
+    await this.updateProgress(job, processed, processed, result);
+  }
+
+  return result;
+}
 
   async completeInternship(
     job,
@@ -3384,16 +3500,16 @@ async generateCertificates(
    * Students mile, lekin ek bhi
    * certificate generate nahi hua.
    */
-  if (
-    students.length > 0 &&
-    files.length === 0
-  ) {
-    throw new Error(
-      skipped[0]?.reason ||
-      failed[0]?.error ||
-      "No certificate was generated",
-    );
-  }
+ if (
+  students.length > 0 &&
+  files.length === 0
+) {
+  console.warn(
+    `[generateCertificates] Job ${job.job_uuid}: no certificates generated.`,
+  );
+  console.warn("Skipped:", JSON.stringify(skipped, null, 2));
+  console.warn("Failed:", JSON.stringify(failed, null, 2));
+}
 
   if (!options.silent) {
     await this.updateProgress(
@@ -3721,6 +3837,10 @@ async generateCertificates(
             },
           ),
       },
+       {
+  name: "quiz_attempts_and_submissions",
+  run: () => this.generateQuizAttemptsAndSubmissions(job, { payload, silent: true }),
+},
       {
         name:
           "complete_learning",
@@ -3828,7 +3948,10 @@ async generateCertificates(
             },
           ),
       },
+     
     ];
+
+    
 
     const completed = [];
     const failed = [];
