@@ -49,7 +49,7 @@ export const certificateTemplate = ({
       ${baseStyles}
 
       @page {
-        size: A4 landscape;
+        size: A4 portrait;
         margin: 8mm;
       }
 
@@ -74,7 +74,7 @@ export const certificateTemplate = ({
       .certificate {
         position: relative;
         width: 100%;
-        height: 190mm;
+        height: 270mm;
         overflow: hidden;
         border: 8px solid #d4af37;
         border-radius: 10px;
@@ -501,15 +501,20 @@ export const certificateTemplate = ({
         <div class="student-name">
           ${escapeHtml(student?.name || "-")}
         </div>
-        <div class="detail">
-          S/o or D/o [Father's/Guardian's Name], bearing University Registration / Enrolment No.
-          <strong>${escapeHtml(collegeRegistrationNumber)}</strong> of
-          <strong>${escapeHtml(college?.name || "-")}</strong>,
-          Session <strong>${escapeHtml(student?.session || "-")}</strong>,
-          with Major in <strong>${escapeHtml(student?.major || "-")}</strong>,
-          has successfully completed his/her internship with
-          <strong>${escapeHtml(company?.name || "RK NEXORA Private Limited")}</strong>.
-        </div>
+       <div class="detail">
+  ${
+    student?.father_name
+      ? `S/o or D/o <strong>${escapeHtml(student.father_name)}</strong>,`
+      : `S/o or D/o <strong>[Father's/Guardian's Name]</strong>,`
+  }
+  bearing University Registration / Enrolment No.
+  <strong>${escapeHtml(collegeRegistrationNumber)}</strong> of
+  <strong>${escapeHtml(college?.name || "-")}</strong>,
+  Session <strong>${escapeHtml(student?.session || "-")}</strong>,
+  with Major in <strong>${escapeHtml(student?.major_subject || "-")}</strong>,
+  has successfully completed his/her internship with
+  <strong>${escapeHtml(company?.name || "RK NEXORA Private Limited")}</strong>.
+</div>
 
         <!-- Internship Details -->
         <div style="display: flex; justify-content: space-around; margin-top: 6px; font-size: 10px; color: #152238;">

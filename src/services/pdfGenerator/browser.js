@@ -548,7 +548,7 @@ export const renderHtmlToPdf =
           true,
 
         preferCSSPageSize:
-          true,
+          false,
 
         margin: {
           top:
