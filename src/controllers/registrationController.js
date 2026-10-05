@@ -15,6 +15,7 @@ import {
   Payment,
   Student,
   College,
+   LateFineSetting, 
 } from "../models/index.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -49,6 +50,111 @@ const normalizeMobileNumber = (
   }
 
   return "";
+};
+
+
+const calculateLateFine = async () => {
+  const setting =
+    await LateFineSetting.findOne({
+      where: { is_active: true },
+      order: [["id", "DESC"]],
+    });
+
+  /* Koi setting nahi */
+  if (!setting) {
+    return {
+      late_fine: 0,
+      is_late: false,
+      start_date: null,
+    };
+  }
+
+  const fineAmount = Number(
+    setting.late_fine_amount || 0,
+  );
+
+  if (fineAmount <= 0) {
+    return {
+      late_fine: 0,
+      is_late: false,
+      start_date: setting.start_date,
+    };
+  }
+
+  /* Aaj ki date (YYYY-MM-DD) */
+  const todayStr = new Date()
+    .toISOString()
+    .slice(0, 10);
+
+  const startDateStr = String(
+    setting.start_date,
+  ).slice(0, 10);
+
+  /* Date se pehle, koi fine nahi */
+  if (todayStr <= startDateStr) {
+    return {
+      late_fine: 0,
+      is_late: false,
+      start_date: startDateStr,
+    };
+  }
+
+  /* Date ke baad, fine lagao */
+  return {
+    late_fine: fineAmount,
+    is_late: true,
+    start_date: startDateStr,
+  };
+};
+
+/*
+|--------------------------------------------------------------------------
+| FEE BREAKDOWN BUILDER
+|--------------------------------------------------------------------------
+| Student ke domain_fee + late_fine ko combine karke
+| fee_breakdown object banata hai.
+|
+| verifyRegistration, lockRegistration — sab isko use karte hain.
+*/
+const buildFeeBreakdown = async (student) => {
+  let domainFee = 0;
+
+  if (student?.domain_id) {
+    const domain = await Domain.findByPk(
+      student.domain_id,
+      { attributes: ["fee"] },
+    );
+
+    const collegeDomainFee =
+      await CollegeDomainFee.findOne({
+        where: {
+          college_id: student.college_id,
+          domain_id: student.domain_id,
+          status: "active",
+        },
+        attributes: ["fee"],
+        raw: true,
+      });
+
+    domainFee = Number(
+      collegeDomainFee?.fee ??
+        domain?.fee ??
+        0,
+    );
+  }
+
+  const lateFineResult =
+    await calculateLateFine();
+
+  return {
+    domain_fee: domainFee,
+    late_fine: lateFineResult.late_fine,
+    total_payable:
+      domainFee + lateFineResult.late_fine,
+    is_late: lateFineResult.is_late,
+    late_fine_start_date:
+      lateFineResult.start_date,
+  };
 };
 
 /*
@@ -621,6 +727,16 @@ export const verifyRegistration =
         documents,
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | FEE BREAKDOWN (har step pe bhejo)
+    |--------------------------------------------------------------------------
+    | Student ko registration ke shuru se hi pata chalna chahiye
+    | ki late fine lag rahi hai ya nahi.
+    */
+    const feeBreakdown =
+      await buildFeeBreakdown(student);
+
     if (
       student.internship_status ===
       "blocked"
@@ -631,6 +747,7 @@ export const verifyRegistration =
       );
     }
 
+    /* Case 1: Payment already done */
     if (
       student.payment_status === "paid"
     ) {
@@ -640,15 +757,16 @@ export const verifyRegistration =
           ...responseData,
           registration_locked: true,
           next_step: "login",
+          fee_breakdown: feeBreakdown,
         },
         "Registration and payment are already completed. Please login.",
       );
     }
 
+    /* Case 2: Registration locked, payment pending */
     if (
       student.registration_locked &&
-      student.payment_status ===
-        "pending"
+      student.payment_status === "pending"
     ) {
       return ok(
         res,
@@ -656,11 +774,13 @@ export const verifyRegistration =
           ...responseData,
           registration_locked: true,
           next_step: "payment",
+          fee_breakdown: feeBreakdown,
         },
         "Registration is locked. Continue to payment.",
       );
     }
 
+    /* Case 3: Documents pending */
     if (
       student.internship_status ===
         "registered" &&
@@ -672,11 +792,13 @@ export const verifyRegistration =
           ...responseData,
           registration_locked: false,
           next_step: "documents",
+          fee_breakdown: feeBreakdown,
         },
         "Registration details are saved. Complete the document upload.",
       );
     }
 
+    /* Case 4: Review pending */
     if (
       student.internship_status ===
         "registered" &&
@@ -688,17 +810,20 @@ export const verifyRegistration =
           ...responseData,
           registration_locked: false,
           next_step: "review",
+          fee_breakdown: feeBreakdown,
         },
         "Review your registration before proceeding to payment.",
       );
     }
 
+    /* Case 5: Fresh details */
     return ok(
       res,
       {
         ...responseData,
         registration_locked: false,
         next_step: "details",
+        fee_breakdown: feeBreakdown,
       },
       "Registration verified. Complete your details.",
     );
@@ -802,53 +927,51 @@ export const listRegistrationDomains =
         ),
       );
 
-    const items =
-      domains.map(
-        (domain) => {
-          const domainData =
-            domain.toJSON();
+   /* Late fine nikalo (global) */
+const lateFineResult =
+  await calculateLateFine();
 
-          const customFee =
-            feeMap.get(
-              Number(
-                domain.id,
-              ),
-            );
+const items = domains.map((domain) => {
+  const domainData = domain.toJSON();
 
-          const defaultFee =
-            Number(
-              domain.fee ||
-                0,
-            );
+  const customFee = feeMap.get(
+    Number(domain.id),
+  );
 
-          return {
-            ...domainData,
+  const defaultFee = Number(
+    domain.fee || 0,
+  );
 
-            default_fee:
-              defaultFee,
+  const finalFee =
+    customFee ?? defaultFee;
 
-            custom_fee:
-              customFee ??
-              null,
+  return {
+    ...domainData,
 
-            fee:
-              customFee ??
-              defaultFee,
+    default_fee: defaultFee,
+    custom_fee: customFee ?? null,
 
-            fee_source:
-              customFee !==
-              undefined
-                ? "college"
-                : "default",
-          };
-        },
-      );
+    fee: finalFee,
+    fee_source:
+      customFee !== undefined
+        ? "college"
+        : "default",
 
-    return ok(
-      res,
-      items,
-      "Registration domains retrieved",
-    );
+    /* ✅ Late fine details har domain ke saath */
+    late_fine: lateFineResult.late_fine,
+    total_payable:
+      finalFee + lateFineResult.late_fine,
+    is_late: lateFineResult.is_late,
+    late_fine_start_date:
+      lateFineResult.start_date,
+  };
+});
+
+return ok(
+  res,
+  items,
+  "Registration domains retrieved",
+);
   });
 
 export const saveRegistration = asyncHandler(
@@ -1203,6 +1326,11 @@ export const lockRegistration =
       );
     }
 
+    /* Fee breakdown nikalo */
+    const feeBreakdown =
+      await buildFeeBreakdown(student);
+
+    /* Case 1: Already paid */
     if (student.payment_status === "paid") {
       return ok(
         res,
@@ -1210,11 +1338,13 @@ export const lockRegistration =
           student_id: student.id,
           registration_locked: true,
           next_step: "login",
+          fee_breakdown: feeBreakdown,
         },
         "Registration is already completed",
       );
     }
 
+    /* Case 2: Already locked */
     if (student.registration_locked) {
       return ok(
         res,
@@ -1222,6 +1352,7 @@ export const lockRegistration =
           student_id: student.id,
           registration_locked: true,
           next_step: "payment",
+          fee_breakdown: feeBreakdown,
         },
         "Registration is already locked",
       );
@@ -1262,34 +1393,38 @@ export const lockRegistration =
       registration_locked: true,
     });
 
-   return ok(
-  res,
-  {
-    student_id:
-      student.id,
-
-    registration_number:
-      student.registration_number,
-
-    portal_registration_number:
-      student.portal_registration_number ||
-      createPortalRegistrationNumber(
-        student,
-      ),
-
-    registration_locked:
-      true,
-
-    payment_status:
-      student.payment_status,
-
-    next_step:
-      "payment",
-  },
-
-  "Registration confirmed and locked",
-);
+    return ok(
+      res,
+      {
+        student_id: student.id,
+        registration_number:
+          student.registration_number,
+        portal_registration_number:
+          student.portal_registration_number ||
+          createPortalRegistrationNumber(
+            student,
+          ),
+        registration_locked: true,
+        payment_status:
+          student.payment_status,
+        next_step: "payment",
+        fee_breakdown: feeBreakdown,
+      },
+      "Registration confirmed and locked",
+    );
   });
+
+
+/*
+|--------------------------------------------------------------------------
+| LATE FINE CALCULATOR
+|--------------------------------------------------------------------------
+| Admin-set date ke baad jo bhi registration/payment kare,
+| usko late fine lagegi.
+|
+| Result: { late_fine, is_late, start_date }
+*/
+
 
 export const createPaymentOrder = asyncHandler(
   async (req, res) => {
@@ -1392,11 +1527,26 @@ export const createPaymentOrder = asyncHandler(
 
         raw: true,
       });
+/* Domain fee nikalo (college assigned ya master) */
+const domainFee = Number(
+  collegeDomainFee?.fee ??
+    student.domain.fee,
+);
 
-    const amount = Number(
-      collegeDomainFee?.fee ??
-        student.domain.fee,
-    );
+/*
+|--------------------------------------------------------------------------
+| LATE FINE (global date based)
+|--------------------------------------------------------------------------
+*/
+const lateFineResult =
+  await calculateLateFine();
+
+const lateFine = lateFineResult.late_fine;
+
+/* Total payable = domain fee + late fine */
+const amount = Number(
+  (domainFee + lateFine).toFixed(2),
+);
 
     const feeSource =
       collegeDomainFee
@@ -1818,58 +1968,42 @@ export const createPaymentOrder = asyncHandler(
       `CF_${student.id}_${Date.now()}`;
 
     await Payment.create({
-      student_id:
-        student.id,
+  student_id: student.id,
+  amount,
 
-      amount,
+  /* ✅ Fee breakdown */
+  domain_fee: domainFee,
+  late_fine: lateFine,
+  total_payable: amount,
 
-      currency:
-        "INR",
+  currency: "INR",
+  transaction_id: transactionId,
+  gateway: "cashfree",
+  order_id: orderId,
+  cashfree_order_id: orderId,
+  cf_order_id: cashfreeOrder.cf_order_id
+    ? String(cashfreeOrder.cf_order_id)
+    : null,
+  status: "created",
+  gateway_payload: {
+    ...cashfreeOrder,
 
-      transaction_id:
-        transactionId,
+    /* Fee breakdown */
+    domain_fee: domainFee,
+    late_fine: lateFine,
+    total_payable: amount,
 
-      gateway:
-        "cashfree",
+    fee_source: feeSource,
+    default_domain_fee: Number(student.domain.fee || 0),
+    college_domain_fee: collegeDomainFee
+      ? Number(collegeDomainFee.fee)
+      : null,
 
-      order_id:
-        orderId,
-
-      cashfree_order_id:
-        orderId,
-
-      cf_order_id:
-        cashfreeOrder.cf_order_id
-          ? String(
-              cashfreeOrder
-                .cf_order_id,
-            )
-          : null,
-
-      status:
-        "created",
-
-      gateway_payload: {
-        ...cashfreeOrder,
-
-        fee_source:
-          feeSource,
-
-        default_domain_fee:
-          Number(
-            student.domain.fee ||
-              0,
-          ),
-
-        college_domain_fee:
-          collegeDomainFee
-            ? Number(
-                collegeDomainFee
-                  .fee,
-              )
-            : null,
-      },
-    });
+    /* Late fine details */
+    late_fine_applied: lateFine > 0,
+    late_fine_start_date: lateFineResult.start_date,
+  },
+});
 
     return ok(
       res,

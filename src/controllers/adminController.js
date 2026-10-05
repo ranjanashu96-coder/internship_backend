@@ -14,6 +14,7 @@ import {
   CollegeDomainFee,
   BulkJob,
   RefreshToken,
+   LateFineSetting,
   
 } from "../models/index.js";
 
@@ -3836,3 +3837,140 @@ export const sendAdminMessage =
       );
     },
   );
+
+  /*
+|--------------------------------------------------------------------------
+| LATE FINE SETTINGS
+|--------------------------------------------------------------------------
+*/
+
+/*
+|--------------------------------------------------------------------------
+| GET /admin/late-fine
+|--------------------------------------------------------------------------
+| Current active late fine settings fetch karo.
+*/
+export const getLateFineSettings = asyncHandler(
+  async (req, res) => {
+    const setting =
+      await LateFineSetting.findOne({
+        where: { is_active: true },
+        order: [["id", "DESC"]],
+      });
+
+    return ok(
+      res,
+      {
+        id: setting?.id || null,
+
+        start_date:
+          setting?.start_date || null,
+
+        late_fine_amount: setting
+          ? Number(setting.late_fine_amount)
+          : 0,
+
+        is_active:
+          setting?.is_active || false,
+
+        updated_at:
+          setting?.updated_at || null,
+      },
+      "Late fine settings fetched successfully",
+    );
+  },
+);
+
+/*
+|--------------------------------------------------------------------------
+| PUT /admin/late-fine
+|--------------------------------------------------------------------------
+| Admin date aur amount set kare.
+| Purani active setting deactivate ho jayegi.
+*/
+export const updateLateFineSettings =
+  asyncHandler(async (req, res) => {
+    const startDate = String(
+      req.body.start_date || "",
+    ).trim();
+
+    const fineAmount = Number(
+      req.body.late_fine_amount,
+    );
+
+    /* Validation */
+    if (!startDate) {
+      throw new AppError(
+        "Start date is required",
+        422,
+      );
+    }
+
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(
+        startDate,
+      )
+    ) {
+      throw new AppError(
+        "Invalid date format (YYYY-MM-DD)",
+        422,
+      );
+    }
+
+    if (
+      !Number.isFinite(fineAmount) ||
+      fineAmount < 0
+    ) {
+      throw new AppError(
+        "Late fine amount must be a valid number",
+        422,
+      );
+    }
+
+    const transaction =
+      await sequelize.transaction();
+
+    try {
+      /* Purani active setting deactivate */
+      await LateFineSetting.update(
+        { is_active: false },
+        {
+          where: { is_active: true },
+          transaction,
+        },
+      );
+
+      /* Nayi setting create */
+      const setting =
+        await LateFineSetting.create(
+          {
+            start_date: startDate,
+            late_fine_amount: fineAmount,
+            is_active: true,
+          },
+          { transaction },
+        );
+
+      await transaction.commit();
+
+      return ok(
+        res,
+        {
+          id: setting.id,
+          start_date: setting.start_date,
+          late_fine_amount: Number(
+            setting.late_fine_amount,
+          ),
+          is_active: true,
+          updated_at: setting.updated_at,
+        },
+        "Late fine settings updated successfully",
+      );
+    } catch (error) {
+      if (!transaction.finished) {
+        await transaction.rollback();
+      }
+      throw error;
+    }
+  },
+);

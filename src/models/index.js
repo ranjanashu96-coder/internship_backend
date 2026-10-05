@@ -1010,6 +1010,56 @@ export const Certificate = define(
     tableName: "certificates",
   },
 );
+
+/*
+|--------------------------------------------------------------------------
+| Late Fine Settings
+|--------------------------------------------------------------------------
+| Admin ek global date aur amount set karega.
+| Us date ke baad jo bhi student registration/payment kare,
+| usko late fine lagegi.
+|
+| Late fine college share mein NAHI judegi.
+*/
+export const LateFineSetting = define(
+  "LateFineSetting",
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    start_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: false,
+    },
+
+    late_fine_amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+
+    ...common,
+  },
+  {
+    tableName: "late_fine_settings",
+
+    indexes: [
+      {
+        fields: ["is_active"],
+      },
+    ],
+  },
+);
+
 export const Payment = define(
   "Payment",
   {
@@ -1028,6 +1078,30 @@ export const Payment = define(
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
     },
+
+     domain_fee: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment:
+        "Base domain fee (college assigned or master)",
+    },
+
+    /* ✅ NAYA: Late Fine (college share mein nahi) */
+    late_fine: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      comment:
+        "Late fine (not part of college share)",
+    },
+
+    /* ✅ NAYA: Total Payable = domain_fee + late_fine */
+    total_payable: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment: "domain_fee + late_fine",
+    },
+
 
     currency: {
       type: DataTypes.STRING(10),

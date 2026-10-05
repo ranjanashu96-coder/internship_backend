@@ -108,6 +108,8 @@ import {
   getPaidStudentsForMessage,
 sendAdminMessage,
   resetStudentPassword,
+  getLateFineSettings,
+  updateLateFineSettings,
 } from "../controllers/adminController.js";
 
 import {
@@ -143,6 +145,22 @@ router.use(authenticate, isAdmin);
 router.get(
   "/dashboard",
   getAdminDashboard,
+);
+
+/*
+|--------------------------------------------------------------------------
+| Late Fine Settings
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/late-fine",
+  getLateFineSettings,
+);
+
+router.put(
+  "/late-fine",
+  updateLateFineSettings,
 );
 
 // router.get("/dashboard", adminDashboard);
