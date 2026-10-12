@@ -153,20 +153,24 @@ export const createPdfGenerator = ({
     return renderDocument({ html, outputPath });
   };
 
-  const generateAttendanceLog = async (data) => {
-    const directory = studentDirectory(data.student, outputRoot);
-    const outputPath = path.join(directory, "internship-attendance-log.pdf");
-    const html = attendanceLogTemplate({
-      ...data,
-      ...assetData,
-      company: {
-        ...organization,
-        ...(data.company || {}),
-      },
-    });
+ const generateAttendanceLog = async (data) => {
+  const directory = studentDirectory(data.student, outputRoot);
+  const outputPath = path.join(directory, "internship-attendance-log.pdf");
+  const html = attendanceLogTemplate({
+    ...data,
+    ...assetData,
+    company: {
+      ...organization,
+      ...(data.company || {}),
+    },
+  });
 
-    return renderDocument({ html, outputPath });
-  };
+  return renderDocument({
+    html,
+    outputPath,
+    landscape: false,   // ← portrait for attendance log
+  });
+};
 
   const generateAssessmentMarksheet = async (data) => {
     const directory = studentDirectory(data.student, outputRoot);

@@ -215,7 +215,7 @@ export const certificateTemplate = ({
         padding: 0 18px 3px;
         border-bottom: 2px solid #d4af37;
         color: #1d4fa3;
-        font-family: "Great Vibes", "Brush Script MT", cursive;
+        font-family: Georgia, "Times New Roman", Cambria, serif;
         font-size: 34px;
         font-weight: 700;
       }

@@ -16,6 +16,8 @@ import {
   bulkPdfDocumentService,
 } from "../services/bulkPdfDocumentService.js";
 
+import { getDomainRemarks } from "../config/domainRemarks.js";
+
 import {
   BulkJob,
   Student,
@@ -1253,31 +1255,56 @@ if (
             logoutTime,
           );
 
-    const rows = [];
+   const rows = [];
 
-    for (
-      const student of students
-    ) {
-      for (const date of dates) {
-        rows.push({
-          student_id:
-            student.id,
-          date,
-          login_time:
-            loginTime,
-          logout_time:
-            logoutTime,
-          learning_hours:
-            learningHours,
-          status:
-            payload.status ||
-            "present",
-          remarks:
-            payload.remarks ||
-            null,
-        });
-      }
-    }
+for (
+  const student of students
+) {
+  // 1) Student ke existing Logbook entries load karo (agar already hain)
+  const existingLogbooks = await Logbook.findAll({
+    where: { student_id: student.id },
+    attributes: ["date", "activity"],
+  });
+
+  const logbookByDate = new Map(
+    existingLogbooks.map((entry) => [
+      String(entry.date).slice(0, 10),
+      entry.activity,
+    ]),
+  );
+
+  // 2) Domain-specific remarks list nikaalo
+  const domainName =
+    student.domain?.domain_name || "";
+  const domainRemarks = getDomainRemarks(domainName);
+
+  // 3) Har working day ke liye remarks decide karo
+  for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
+    const date = dates[dayIndex];
+
+    const remarksFromLogbook = logbookByDate.get(String(date));
+
+    const remarksFromDomain =
+      domainRemarks[dayIndex % domainRemarks.length];
+
+  const remarks =
+  remarksFromLogbook ||
+  remarksFromDomain ||
+  payload.daily_activity ||
+  payload.remarks ||
+  "Completed assigned learning modules and internship activities.";
+
+    rows.push({
+      student_id: student.id,
+      date,
+      login_time: loginTime,
+      logout_time: logoutTime,
+      learning_hours: learningHours,
+      status: payload.status || "present",
+      remarks,
+    });
+  }
+}
 
     const batchSize = 1000;
     let processed = 0;
@@ -2825,55 +2852,57 @@ async generateAttendanceSheets(
           payload,
         );
 
-      for (
-        const record of attendance
-      ) {
-        const [
-          entry,
-          created,
-        ] =
-          await Logbook.findOrCreate(
-            {
-              where: {
-                student_id:
-                  student.id,
-                date:
-                  record.date,
-              },
+    for (
+  let index = 0;
+  index < attendance.length;
+  index += 1
+) {
+  const record = attendance[index];
 
-              defaults: {
-                activity:
-                  payload.daily_activity ||
-                  "Completed assigned learning modules and internship activities.",
+  // Priority 1: Attendance ke remarks se activity uthao
+  const activityFromAttendance =
+    record.remarks &&
+    String(record.remarks).trim() &&
+    String(record.remarks).trim() !== "-"
+      ? String(record.remarks).trim()
+      : null;
 
-                skills:
-                  payload.skills ||
-                  "Technical learning, communication and professional skills",
+  // Priority 2: Domain remarks se fallback
+  const domainName = student.domain?.domain_name || "";
+  const domainRemarks = getDomainRemarks(domainName);
+  const domainFallback =
+    domainRemarks[index % domainRemarks.length];
 
-                hours_worked:
-                  record.learning_hours ||
-                  0,
-              },
-            },
-          );
+  // Final activity decide karo
+  const activity =
+    activityFromAttendance ||
+    payload.daily_activity ||
+    domainFallback ||
+    "Completed assigned learning modules and internship activities.";
 
-        if (!created) {
-          await entry.update({
-            activity:
-              payload.daily_activity ||
-              entry.activity,
+  const [entry, created] = await Logbook.findOrCreate({
+    where: {
+      student_id: student.id,
+      date: record.date,
+    },
+    defaults: {
+      activity,
+      skills:
+        payload.skills ||
+        "Technical learning, communication and professional skills",
+      hours_worked: record.learning_hours || 0,
+    },
+  });
 
-            skills:
-              payload.skills ||
-              entry.skills,
-
-            hours_worked:
-              record.learning_hours ||
-              entry.hours_worked ||
-              0,
-          });
-        }
-      }
+  if (!created) {
+    await entry.update({
+      activity,
+      skills: payload.skills || entry.skills,
+      hours_worked:
+        record.learning_hours || entry.hours_worked || 0,
+    });
+  }
+}
 
       const entries =
         await Logbook.findAll({
