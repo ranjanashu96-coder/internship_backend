@@ -451,186 +451,79 @@ const createPdfPage =
 |--------------------------------------------------------------------------
 */
 
-export const renderHtmlToPdf =
-  async ({
-    html,
-    outputPath,
-    landscape = false,
-  }) => {
-    let page = null;
+export const renderHtmlToPdf = async ({
+  html,
+  outputPath,
+  landscape = false,
+}) => {
+  let page = null;
 
-    try {
-      /*
-       * IMPORTANT:
-       * direct browser.newPage()
-       * nahi karenge.
-       */
-      page =
-        await createPdfPage();
+  try {
+    page = await createPdfPage();
 
-      /*
-      |--------------------------------------------------------------------------
-      | Page Configuration
-      |--------------------------------------------------------------------------
-      */
+    page.setDefaultTimeout(120_000);
+    page.setDefaultNavigationTimeout(120_000);
 
-      page.setDefaultTimeout(
-        120_000,
-      );
+    // ✅ networkidle0 — saari images/fonts load hone tak wait
+   await page.setContent(html, {
+  waitUntil: "domcontentloaded",   // ✅ YEH USE KARO
+  timeout: 60_000,
+});
 
-      page.setDefaultNavigationTimeout(
-        120_000,
-      );
+// ✅ Extra: images load hone ka chhota wait
+await new Promise((resolve) => setTimeout(resolve, 500));
 
-      /*
-      |--------------------------------------------------------------------------
-      | HTML
-      |--------------------------------------------------------------------------
-      */
+    // ✅ Fonts ready hone ka wait
+    await page.evaluate(() => document.fonts.ready);
 
-      await page.setContent(
-        html,
-        {
-          waitUntil: 
-            "domcontentloaded",
-          timeout:
-            60_000,
-          
+    // ✅ Layout stable hone ka chhota wait
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
-         
-        },
-      );
+    // ✅ Print media emulate
+    await page.emulateMediaType("print");
 
-      /*
-      |--------------------------------------------------------------------------
-      | Print Media
-      |--------------------------------------------------------------------------
-      */
+    const outputDirectory = path.dirname(outputPath);
+    await fs.promises.mkdir(outputDirectory, { recursive: true });
 
-      await page.emulateMediaType(
-        "print",
-      );
+    // ✅ PDF generate — SAHI OPTIONS
+    await page.pdf({
+      path: outputPath,
+      format: "A4",
+      landscape,
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: {
+        top: "0mm",
+        right: "0mm",
+        bottom: "0mm",
+        left: "0mm",
+      },
+    });
 
-      /*
-      |--------------------------------------------------------------------------
-      | Ensure Output Directory
-      |--------------------------------------------------------------------------
-      */
+    const stats = await fs.promises.stat(outputPath);
+    if (!stats || stats.size <= 0) {
+      throw new Error("Generated PDF file is empty");
+    }
 
-      const outputDirectory =
-        path.dirname(
-          outputPath,
-        );
-
-      await fs.promises.mkdir(
-        outputDirectory,
-        {
-          recursive: true,
-        },
-      );
-
-      /*
-      |--------------------------------------------------------------------------
-      | Generate PDF
-      |--------------------------------------------------------------------------
-      */
-
-      await page.pdf({
-        path:
-          outputPath,
-
-        format:
-          "A4",
-
-        landscape,
-
-        printBackground:
-          true,
-
-        preferCSSPageSize:
-          false,
-
-        margin: {
-          top:
-            "0mm",
-
-          right:
-            "0mm",
-
-          bottom:
-            "0mm",
-
-          left:
-            "0mm",
-        },
-      });
-
-      /*
-      |--------------------------------------------------------------------------
-      | Validate Generated File
-      |--------------------------------------------------------------------------
-      */
-
-      const stats =
-        await fs.promises.stat(
-          outputPath,
-        );
-
-      if (
-        !stats ||
-        stats.size <= 0
-      ) {
-        throw new Error(
-          "Generated PDF file is empty",
-        );
-      }
-
-      return outputPath;
-    } catch (error) {
-      console.error(
-        "❌ PDF generation failed:",
-        error,
-      );
-
-      /*
-       * Agar rendering ke beech
-       * browser disconnect hua hai,
-       * next student ko dead browser
-       * nahi milega.
-       */
-      if (
-        isBrowserConnectionError(
-          error,
-        )
-      ) {
-        await resetPdfBrowser();
-      }
-
-      throw error;
-    } finally {
-      /*
-      |--------------------------------------------------------------------------
-      | Always Close Page
-      |--------------------------------------------------------------------------
-      */
-
-      if (page) {
-        try {
-          if (
-            !page.isClosed()
-          ) {
-            await page.close();
-          }
-        } catch (error) {
-          console.warn(
-            "⚠️ PDF page close failed:",
-            error?.message ||
-              error,
-          );
+    return outputPath;
+  } catch (error) {
+    console.error("❌ PDF generation failed:", error);
+    if (isBrowserConnectionError(error)) {
+      await resetPdfBrowser();
+    }
+    throw error;
+  } finally {
+    if (page) {
+      try {
+        if (!page.isClosed()) {
+          await page.close();
         }
+      } catch (error) {
+        console.warn("⚠️ PDF page close failed:", error?.message || error);
       }
     }
-  };
+  }
+};
 
 
 /*

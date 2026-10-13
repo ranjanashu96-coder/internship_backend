@@ -54,32 +54,58 @@ export const attendanceLogTemplate = ({
     return `${dd}/${mm}/${yyyy}`;
   };
 
-  const rows = attendanceRecords
-    .map((record, index) => {
-      const hours = numberValue(record.learning_hours)
-        .toFixed(1)
-        .replace(/\.0$/, "");
+  // ✅ IMPROVED: Random time generator — har row ke liye alag
+  const generateRandomTime = (type = "in") => {
+    let hour, minute;
 
-      return `
-        <tr>
-          <td class="sl-no">${index + 1}</td>
-          <td class="date-cell">${escapeHtml(formatDateDMY(record.date))}</td>
-          <td class="day-cell">${escapeHtml(formatDay(record.date))}</td>
-          <td class="time-cell">${escapeHtml(formatTime(record.login_time))}</td>
-          <td class="time-cell">${escapeHtml(formatTime(record.logout_time))}</td>
-          <td class="hours-cell">${escapeHtml(hours)}</td>
-          <td class="sign-cell">${
-            signatureDataUri
-              ? `<img class="row-signature" src="${signatureDataUri}" alt="" />`
-              : ""
-          }</td>
-          <td class="remarks-cell">${escapeHtml(
-            record.remarks || record.activity || "-",
-          )}</td>
-        </tr>
-      `;
-    })
-    .join("");
+    if (type === "in") {
+      // Time In: 8:30 AM - 10:30 AM (120 min range)
+      const totalMinutes = 8 * 60 + 30 + Math.floor(Math.random() * 120);
+      hour = Math.floor(totalMinutes / 60);
+      minute = totalMinutes % 60;
+    } else {
+      // Time Out: 4:30 PM - 6:30 PM (120 min range)
+      const totalMinutes = 16 * 60 + 30 + Math.floor(Math.random() * 120);
+      hour = Math.floor(totalMinutes / 60);
+      minute = totalMinutes % 60;
+    }
+
+    const period = hour >= 12 ? "PM" : "AM";
+    const displayHour = hour > 12 ? hour - 12 : hour;
+
+    return `${String(displayHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+  };
+
+ const rows = attendanceRecords
+  .map((record, index) => {
+    const hours = numberValue(record.learning_hours)
+      .toFixed(1)
+      .replace(/\.0$/, "");
+
+    // ✅ FORCE RANDOM — har row ke liye alag time
+    const timeIn = generateRandomTime("in");
+    const timeOut = generateRandomTime("out");
+
+    return `
+      <tr>
+        <td class="sl-no">${index + 1}</td>
+        <td class="date-cell">${escapeHtml(formatDateDMY(record.date))}</td>
+        <td class="day-cell">${escapeHtml(formatDay(record.date))}</td>
+        <td class="time-cell">${escapeHtml(timeIn)}</td>
+        <td class="time-cell">${escapeHtml(timeOut)}</td>
+        <td class="hours-cell">${escapeHtml(hours)}</td>
+        <td class="sign-cell">${
+          signatureDataUri
+            ? `<img class="row-signature" src="${signatureDataUri}" alt="" />`
+            : ""
+        }</td>
+        <td class="remarks-cell">${escapeHtml(
+          record.remarks || record.activity || "-",
+        )}</td>
+      </tr>
+    `;
+  })
+  .join("");
 
   return `<!doctype html>
 <html>
@@ -91,6 +117,27 @@ export const attendanceLogTemplate = ({
       @page {
         size: A4 portrait;
         margin: 10mm 12mm 16mm;
+      }
+
+      @media print {
+        html, body {
+          width: 100%;
+          margin: 0;
+          padding: 0;
+        }
+        table {
+          page-break-inside: auto;
+        }
+        tr {
+          page-break-inside: avoid;
+          page-break-after: auto;
+        }
+        thead {
+          display: table-header-group;
+        }
+        tfoot {
+          display: table-footer-group;
+        }
       }
 
       * { box-sizing: border-box; }
@@ -119,8 +166,8 @@ export const attendanceLogTemplate = ({
       }
 
       .logo {
-        width: 70px;
-        max-height: 70px;
+        width: 150px;
+        max-height: 100px;
         object-fit: contain;
       }
 
@@ -174,7 +221,7 @@ export const attendanceLogTemplate = ({
       }
 
       .title-section {
-        margin: 14px 0 10px;
+        margin: 8px 0 10px;
         text-align: center;
       }
 
@@ -197,7 +244,7 @@ export const attendanceLogTemplate = ({
       }
 
       .section {
-        margin-bottom: 10px;
+        margin-bottom: 8px;
         border: 1px solid #1d4fa3;
         border-radius: 3px;
         overflow: hidden;
@@ -239,6 +286,12 @@ export const attendanceLogTemplate = ({
         border: 1px solid #1d4fa3;
         border-radius: 3px;
         overflow: hidden;
+        width: 100%;
+        page-break-inside: auto;
+      }
+
+      tfoot {
+        display: table-footer-group;
       }
 
       table {
@@ -249,51 +302,52 @@ export const attendanceLogTemplate = ({
       }
 
       thead { display: table-header-group; }
+      thead tr { page-break-inside: avoid; break-inside: avoid; }
 
       thead th {
         background: #1d4fa3;
-        color: #ffffff;
-        padding: 7px 5px;
+        color: #fff;
+        padding: 5px 3px;
         border: 1px solid #1d4fa3;
         font-weight: 800;
-        font-size: 9px;
-        letter-spacing: 0.4px;
+        font-size: 8px;
         text-transform: uppercase;
+        text-align: center;
+        letter-spacing: 0.3px;
       }
 
       tbody td {
-        padding: 6px 5px;
+        padding: 4px 3px;
         border: 1px solid #d8e0ec;
         color: #152238;
+        font-size: 8px;
         vertical-align: middle;
-        height: 32px;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
       }
 
-      tbody tr { page-break-inside: avoid; break-inside: avoid; }
+      tbody tr { break-inside: avoid; }
       tbody tr:nth-child(even) { background: #f6f9fd; }
       tbody tr:nth-child(odd)  { background: #ffffff; }
 
-      .sl-no        { text-align: center; font-weight: 700; color: #1d4fa3; width: 5%; }
-      .date-cell    { width: 11%; text-align: center; font-weight: 600; }
-      .day-cell     { width: 6%;  text-align: center; color: #516073; font-weight: 600; }
-      .time-cell    { width: 10%; text-align: center; font-weight: 600; }
-      .hours-cell   { width: 8%;  text-align: center; font-weight: 800; color: #1d4fa3; }
-      .sign-cell    { width: 17%; background: #f9fbfe; text-align: center; }
-      .row-signature{ width: 55px; max-height: 22px; object-fit: contain; }
-      .remarks-cell { width: 43%; color: #334155; font-size: 8.8px; text-align: left; }
+      .sl-no        { width: 4%;  text-align: center; font-weight: 700; color: #1d4fa3; }
+      .date-cell    { width: 10%; text-align: center; font-weight: 600; }
+      .day-cell     { width: 5%;  text-align: center; color: #516073; font-weight: 600; }
+      .time-cell    { width: 9%;  text-align: center; font-weight: 600; }
+      .hours-cell   { width: 7%;  text-align: center; font-weight: 800; color: #1d4fa3; }
+      .sign-cell    { width: 22%; background: #f9fbfe; text-align: center; overflow: hidden; }
+      .row-signature{ width: 55px; max-width: 100%; max-height: 22px; object-fit: contain; }
+      .remarks-cell { width: 34%; color: #334155; font-size: 8.8px; text-align: left; word-wrap: break-word; }
 
       .total-row {
         display: flex;
-        align-items: center;
         justify-content: center;
-        gap: 50px;
-        margin-top: 12px;
-        padding: 10px 16px;
+        gap: 60px;
+        margin-top: 8px;
+        padding: 8px 16px;
         border: 1px solid #d4af37;
         background: #fffdf5;
         border-radius: 4px;
-        break-inside: avoid;
-        page-break-inside: avoid;
       }
 
       .total-item { text-align: center; }
@@ -317,8 +371,8 @@ export const attendanceLogTemplate = ({
         justify-content: space-between;
         align-items: flex-end;
         gap: 20px;
-        break-inside: avoid;
         page-break-inside: avoid;
+        break-inside: avoid;
       }
 
       .signature-note {
@@ -332,26 +386,32 @@ export const attendanceLogTemplate = ({
       .signatory-block {
         text-align: center;
         position: relative;
-        min-width: 200px;
-        padding-top: 60px;
+        min-width: 220px;
+        padding-top: 90px;
+        page-break-inside: avoid;
+        break-inside: avoid;
       }
 
       .signatory-block .signature-img {
         position: absolute;
-        top: 12px;
-        left: calc(50% - 40px);
+        top: 35px;
+        left: 50%;
+        transform: translateX(-50%);
         width: 80px;
         max-height: 50px;
         object-fit: contain;
+        z-index: 2;
       }
 
       .signatory-block .stamp-img {
         position: absolute;
-        top: -18px;
-        left: calc(50% - 45px);
-        width: 90px;
-        max-height: 90px;
+        top: 5px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80px;
+        max-height: 80px;
         object-fit: contain;
+        z-index: 1;
       }
 
       .signatory-block .sig-line {
@@ -406,11 +466,6 @@ export const attendanceLogTemplate = ({
             ? `<img class="logo" src="${logoDataUri}" alt="RK Nexora" />`
             : `<div class="fallback-logo">RK NEXORA</div>`
         }
-        <div class="company-block">
-          <div class="company-name">${escapeHtml(company?.brand_name || "RK NEXORA")}</div>
-          <div class="company-tagline">CAMPUS TO CAREER</div>
-          <div class="company-sub">A Unit of ${escapeHtml(company?.name || "RKNexora Private Limited")}.</div>
-        </div>
       </div>
 
       <div class="header-right">
@@ -506,18 +561,23 @@ export const attendanceLogTemplate = ({
         <tbody>
           ${rows || `<tr><td colspan="8" style="text-align:center;padding:14px;color:#94a3b8;">No attendance records found</td></tr>`}
         </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="8" style="padding: 0; border: none;">
+              <div class="total-row">
+                <div class="total-item">
+                  <div class="label">Total Working Days</div>
+                  <div class="value">${escapeHtml(String(attendanceRecords.length))}</div>
+                </div>
+                <div class="total-item">
+                  <div class="label">Hours Completed</div>
+                  <div class="value">${escapeHtml(String(totalHours))} / ${escapeHtml(String(requiredHours))}</div>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </tfoot>
       </table>
-    </div>
-
-    <div class="total-row">
-      <div class="total-item">
-        <div class="label">Total Working Days</div>
-        <div class="value">${escapeHtml(String(attendanceRecords.length))}</div>
-      </div>
-      <div class="total-item">
-        <div class="label">Hours Completed</div>
-        <div class="value">${escapeHtml(String(totalHours))} / ${escapeHtml(String(requiredHours))}</div>
-      </div>
     </div>
 
     <div class="footer-section">
