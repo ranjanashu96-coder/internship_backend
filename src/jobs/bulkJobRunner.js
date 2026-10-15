@@ -54,6 +54,7 @@ export const BULK_JOB_TYPES = Object.freeze([
   "certificates",
   "zip_documents",
   "full_internship_process",
+  "quiz_attempts_and_submissions",
 ]);
 
 // const GENERATED_ROOT = path.resolve(
@@ -741,6 +742,8 @@ getJobStepLabel(
         this.generateAttendance(
           job,
         ),
+
+         quiz_attempts_and_submissions: () => this.generateQuizAttemptsAndSubmissions(job),
 
       complete_learning: () =>
         this.completeLearning(
@@ -1641,7 +1644,7 @@ for (
     return result;
   }
 
- async generateQuizAttemptsAndSubmissions(job, options = {}) {
+async generateQuizAttemptsAndSubmissions(job, options = {}) {
   const payload = { ...(job.payload || {}), ...(options.payload || {}) };
 
   const students = await this.getStudents(payload);
@@ -1661,7 +1664,7 @@ for (
       continue;
     }
 
-    // 1) Domain ke saare chapters (same helper jo completeLearning use karta hai)
+    // 1) Domain ke saare chapters
     const chapters = await this.getStudentChapters(student, payload);
     const chapterIds = chapters.map((c) => Number(c.id));
 
@@ -1669,7 +1672,7 @@ for (
       continue;
     }
 
-    // 2) Active quizzes — simple where, no include
+    // 2) Active quizzes
     const quizzes = await Quiz.findAll({
       where: {
         chapter_id: { [Op.in]: chapterIds },
@@ -1681,29 +1684,51 @@ for (
     totalQuizzes += quizzes.length;
 
     for (const quiz of quizzes) {
-      const [attempt, created] = await QuizAttempt.findOrCreate({
+      await this.assertNotCancelled(job);
+
+      // ✅ Pehle check karo ki attempt already exist karta hai ya nahi
+      const existingAttempt = await QuizAttempt.findOne({
         where: {
           student_id: student.id,
           quiz_id: quiz.id,
         },
-        defaults: {
-          status: "submitted",
-          passed: true,
-          submitted_at: completedAt,
-        },
       });
 
-      if (!created) {
-        await attempt.update({
+      if (existingAttempt) {
+        // Already exists — update kar do
+        await existingAttempt.update({
           status: "submitted",
           passed: true,
+          score: existingAttempt.score || 100,
+          submitted_at: completedAt,
+          // attempt_number aur started_at already set honge
+        });
+      } else {
+        // Naya attempt banao — saare required fields ke saath
+        await QuizAttempt.create({
+          student_id: student.id,
+          quiz_id: quiz.id,
+
+          // ✅ Required fields
+          attempt_number: 1,
+          started_at: completedAt,
+          submitted_at: completedAt,
+
+          // ✅ Result fields
+          status: "submitted",
+          passed: true,
+          score: 100,
+
+          // Optional: agar aapke model me ye fields hain
+          // total_marks: 100,
+          // obtained_marks: 100,
         });
       }
 
       processed += 1;
     }
 
-    // 3) Assignments — simple where, no include
+    // 3) Assignments
     const assignments = await Assignment.findAll({
       where: {
         chapter_id: { [Op.in]: chapterIds },
@@ -1714,6 +1739,8 @@ for (
     totalAssignments += assignments.length;
 
     for (const assignment of assignments) {
+      await this.assertNotCancelled(job);
+
       const [submission, created] = await Submission.findOrCreate({
         where: {
           student_id: student.id,
@@ -1721,7 +1748,6 @@ for (
         },
         defaults: {
           status: "approved",
-          // Submission.file_url is allowNull:false → dummy value do
           file_url: "-",
           marks: 100,
           mentor_comments: "Auto-approved through bulk automation",
@@ -3866,10 +3892,7 @@ async generateCertificates(
             },
           ),
       },
-       {
-  name: "quiz_attempts_and_submissions",
-  run: () => this.generateQuizAttemptsAndSubmissions(job, { payload, silent: true }),
-},
+      
       {
         name:
           "complete_learning",
@@ -3882,6 +3905,11 @@ async generateCertificates(
             },
           ),
       },
+
+       {
+  name: "quiz_attempts_and_submissions",
+  run: () => this.generateQuizAttemptsAndSubmissions(job, { payload, silent: true }),
+},
       {
         name: "assessment",
         run: () =>
