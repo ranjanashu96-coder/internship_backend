@@ -14,6 +14,7 @@ import {
 } from "../models/index.js";
 
 import { pdfGenerator } from "./pdfGenerator/index.js";
+import { getCertificateDomainRemarks } from "../config/certificateDomainRemarks.js";
 import {
   calculateTotalHours,
   gradeFromPercentage,
@@ -501,54 +502,71 @@ export const documentAutomationService = {
     return generated;
   },
 
-  async generateCertificate(
+ async generateCertificate(
+  studentId,
+  payload = {},
+  createdBy = null,
+) {
+  const bundle = await loadStudentBundle(
     studentId,
-    payload = {},
-    createdBy = null,
-  ) {
-    const bundle = await loadStudentBundle(
-      studentId,
-      payload,
+    payload,
+  );
+
+  const certificate =
+    await ensureCertificate(bundle, payload);
+
+  // ✅ NEW: domain-wise remarks nikalo
+  const domainName =
+    payload.domain_name ||
+    bundle.domain?.domain_name ||
+    "";
+
+  const gender =
+    payload.gender ||
+    bundle.student?.gender ||
+    "";
+
+  const domainRemarks =
+    getCertificateDomainRemarks(
+      domainName,
+      gender,
     );
 
-    const certificate =
-      await ensureCertificate(bundle, payload);
+  const generated =
+    await pdfGenerator.generateCertificate({
+      ...bundle,
+      certificate,
+      domainRemarks,  // ✅ NEW: template ko bhejo
+    });
 
-    const generated =
-      await pdfGenerator.generateCertificate({
-        ...bundle,
-        certificate,
-      });
+  await certificate.update({
+    certificate_url: generated.publicUrl,
+    qr_code_url:
+      generated.qrPublicUrl,
+  });
 
-    await certificate.update({
-      certificate_url: generated.publicUrl,
+  await bundle.student.update({
+    certificate_generated: true,
+    certificate_url: generated.publicUrl,
+  });
+
+  await persistGeneratedDocument({
+    studentId,
+    type: DOCUMENT_TYPES.CERTIFICATE,
+    generated,
+    createdBy,
+    metadata: {
+      certificate_number:
+        certificate.certificate_number,
+      verification_url:
+        certificate.verification_url,
       qr_code_url:
         generated.qrPublicUrl,
-    });
+    },
+  });
 
-    await bundle.student.update({
-      certificate_generated: true,
-      certificate_url: generated.publicUrl,
-    });
-
-    await persistGeneratedDocument({
-      studentId,
-      type: DOCUMENT_TYPES.CERTIFICATE,
-      generated,
-      createdBy,
-      metadata: {
-        certificate_number:
-          certificate.certificate_number,
-        verification_url:
-          certificate.verification_url,
-        qr_code_url:
-          generated.qrPublicUrl,
-      },
-    });
-
-    return generated;
-  },
-
+  return generated;
+},
   async generateAll(
     studentId,
     payload = {},

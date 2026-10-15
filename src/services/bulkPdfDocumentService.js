@@ -197,6 +197,8 @@ class BulkPdfDocumentService {
         attendance,
       );
 
+       const mentorSignature = student.mentor?.signature || null;
+
     const result =
       await documentAutomationService
         .generateAttendanceLog(
@@ -236,6 +238,8 @@ class BulkPdfDocumentService {
               student.mentor
                 ?.name ||
               "Rahul Kumar",
+
+               supervisor_signature: mentorSignature,
 
             organization_name:
               organizationName ||
@@ -499,69 +503,67 @@ class BulkPdfDocumentService {
     return normalized;
   }
 
-  async generateCertificate({
-    student,
-    certificateNumber,
-    verificationUrl,
-    issuedDate,
-    generatedAt,
-    totalHours = 120,
-    createdBy = null,
-  }) {
-    validateStudent(student);
+ async generateCertificate({
+  student,
+  certificateNumber,
+  verificationUrl,
+  issuedDate,
+  generatedAt,
+  totalHours = 120,
+  createdBy = null,
+}) {
+  validateStudent(student);
 
-    const generated =
-      await documentAutomationService
-        .generateCertificate(
-          student.id,
-          {
-            generated_at:
-              toIsoDateTime(
-                generatedAt,
-              ),
+  // ✅ NEW: domain name aur gender nikalo
+  const domainName =
+    student.domain?.domain_name ||
+    student.domain_name ||
+    "";
 
-            issued_date:
-              issuedDate ||
-              toDateOnly(
-                generatedAt,
-              ),
+  const gender =
+    student.gender || "";
 
-            certificate_number:
-              certificateNumber,
+  const generated =
+    await documentAutomationService
+      .generateCertificate(
+        student.id,
+        {
+          generated_at:
+            toIsoDateTime(generatedAt),
 
-            verification_url:
-              verificationUrl,
+          issued_date:
+            issuedDate ||
+            toDateOnly(generatedAt),
 
-            duration_hours:
-              Number(
-                totalHours ||
-                120,
-              ),
+          certificate_number:
+            certificateNumber,
 
-            total_hours:
-              Number(
-                totalHours ||
-                120,
-              ),
-          },
-          createdBy,
-        );
+          verification_url:
+            verificationUrl,
 
-    const normalized =
-      normalizeResult(
-        generated,
+          duration_hours:
+            Number(totalHours || 120),
+
+          total_hours:
+            Number(totalHours || 120),
+
+          // ✅ NEW: domain info payload me bhejo
+          domain_name: domainName,
+          gender: gender,
+        },
+        createdBy,
       );
 
-    if (
-      !normalized.file_url
-    ) {
-      throw new Error(
-        "Certificate PDF URL was not returned",
-      );
-    }
+  const normalized = normalizeResult(generated);
 
-    return normalized;
+  if (!normalized.file_url) {
+    throw new Error(
+      "Certificate PDF URL was not returned",
+    );
   }
+
+  return normalized;
+}
 }
 
 export const bulkPdfDocumentService =

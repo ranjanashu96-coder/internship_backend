@@ -329,6 +329,10 @@ export const Mentor = define(
     },
     qualification: DataTypes.STRING(255),
     profile_photo: DataTypes.STRING(500),
+    signature: {
+  type: DataTypes.STRING(500),
+  allowNull: true,
+},
     password_hash: DataTypes.STRING(255),
     status: {
       type: DataTypes.ENUM(

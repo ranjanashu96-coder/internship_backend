@@ -23,6 +23,7 @@ export const certificateTemplate = ({
   college,
   domain,
   internship,
+  domainRemarks,
   certificate,
 }) => {
   const portalRegistrationNumber =
@@ -104,8 +105,8 @@ export const certificateTemplate = ({
       }
 
       .logo {
-        width: 80px;
-        max-height: 80px;
+        width: 150px;
+        max-height: 100px;
         object-fit: contain;
       }
 
@@ -461,11 +462,7 @@ export const certificateTemplate = ({
               ? `<img class="logo" src="${logoDataUri}" alt="RK Nexora" />`
               : `<div class="fallback-logo">RK NEXORA</div>`
           }
-          <div class="company-info">
-            <div class="company-name">${escapeHtml(company?.name || "RK NEXORA PRIVATE LIMITED")}</div>
-            <div class="company-tagline">LEARN | PRACTICE | GROW | GET PLACED</div>
-            <div class="company-sub">A Unit of RKNexora Private Limited</div>
-          </div>
+         
         </div>
         <div class="header-right">
           <div class="contact-item">
@@ -540,10 +537,12 @@ export const certificateTemplate = ({
         <!-- Assessment Section -->
         <div class="assessment-section">
           <div class="assessment-header">INTERNSHIP PERFORMANCE ASSESSMENT</div>
-          <div style="font-size: 10px; margin-bottom: 2px;">
-            During the internship, the student worked on assigned project(s) and task(s). Based on our observation
-            and mentorship, we assess the student's performance as follows:
-          </div>
+         <div style="font-size: 10px; margin-bottom: 2px;">
+  ${escapeHtml(
+    domainRemarks?.assessment ||
+    "During the internship, the student worked on assigned project(s) and task(s). Based on our observation and mentorship, we assess the student's performance as follows:"
+  )}
+</div>
           <table class="assessment-table">
             <thead>
               <tr>
@@ -583,11 +582,13 @@ export const certificateTemplate = ({
         </div>
 
         <!-- Supervisor Remarks -->
-        <div class="remarks-box">
-          <strong>Supervisor's Remarks:</strong>
-          The student has shown good understanding of the assigned work, completed tasks sincerely and demonstrated
-          a positive attitude towards learning. Keep up the good work.
-        </div>
+       <div class="remarks-box">
+  <strong>Supervisor's Remarks:</strong>
+  ${escapeHtml(
+    domainRemarks?.supervisor_remarks ||
+    "The student has shown good understanding of the assigned work, completed tasks sincerely and demonstrated a positive attitude towards learning. Keep up the good work."
+  )}
+</div>
       </div>
 
       <!-- Bottom Section -->

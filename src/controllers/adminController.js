@@ -1185,7 +1185,7 @@ export const getById = (entity) =>
       ];
     }
 
-    if (entity === "mentors") {
+   if (entity === "mentors") {
   options.attributes = {
     exclude: ["password_hash"],
   };
@@ -1219,6 +1219,25 @@ export const getById = (entity) =>
     if (!row) {
       throw new AppError("Record not found", 404);
     }
+
+    if (entity === "mentors") {
+  const mentorUser = await User.findOne({
+    where: {
+      email: row.email,
+      role: "mentor",
+    },
+    attributes: ["id", "username", "email", "status"],
+  });
+
+  if (mentorUser) {
+    row.dataValues.username = mentorUser.username;
+    row.dataValues.user_id = mentorUser.id;
+  } else {
+    row.dataValues.username = null;
+    row.dataValues.user_id = null;
+  }
+}
+
 
     ok(res, row);
   });
@@ -2548,13 +2567,24 @@ export const createMentor = asyncHandler(async (req, res) => {
       mobile,
       email,
       qualification,
-      profile_photo,
       password,
       username,
       domain_id,
       college_id,
       status = "active",
     } = req.body;
+
+    // ✅ NEW: files nikalo (profile_photo + signature)
+    const profilePhotoFile = req.files?.profile_photo?.[0];
+    const signatureFile = req.files?.signature?.[0];
+
+    const profilePhotoPath = profilePhotoFile
+      ? `/uploads/mentors/${profilePhotoFile.filename}`
+      : null;
+
+    const signaturePath = signatureFile
+      ? `/uploads/mentors/${signatureFile.filename}`
+      : null;
 
     if (!name) {
       throw new AppError("Mentor name is required", 422);
@@ -2600,10 +2630,7 @@ export const createMentor = asyncHandler(async (req, res) => {
 
     const existingMentor = await Mentor.findOne({
       where: {
-        [Op.or]: [
-          { employee_id },
-          { email },
-        ],
+        [Op.or]: [{ employee_id }, { email }],
       },
       transaction,
     });
@@ -2648,37 +2675,34 @@ export const createMentor = asyncHandler(async (req, res) => {
         mobile: mobile || null,
         email,
         qualification: qualification || null,
-        profile_photo: profile_photo || null,
+        profile_photo: profilePhotoPath,
+        signature: signaturePath,        // ✅ NEW
         password_hash: passwordHash,
         status,
       },
-      {
-        transaction,
-      },
+      { transaction },
     );
 
-   const user = await User.create(
-  {
-    username: loginUsername,
-    email,
-    password_hash: passwordHash,
-    role: "mentor",
-    college_id: college_id || null,
-    status,
-  },
-  {
-    transaction,
-  },
-);
+    const user = await User.create(
+      {
+        username: loginUsername,
+        email,
+        password_hash: passwordHash,
+        role: "mentor",
+        college_id: college_id || null,
+        status,
+      },
+      { transaction },
+    );
 
-const assignedStudentCount =
-  await assignMentorToMatchingStudents({
-    mentor,
-    transaction,
-    overwriteExisting: false,
-  });
+    const assignedStudentCount =
+      await assignMentorToMatchingStudents({
+        mentor,
+        transaction,
+        overwriteExisting: false,
+      });
 
-await transaction.commit();
+    await transaction.commit();
 
     ok(
       res,
@@ -2696,6 +2720,7 @@ await transaction.commit();
           email: mentor.email,
           qualification: mentor.qualification,
           profile_photo: mentor.profile_photo,
+          signature: mentor.signature,    // ✅ NEW
           status: mentor.status,
         },
         user: {
@@ -2706,14 +2731,26 @@ await transaction.commit();
           college_id: user.college_id,
           status: user.status,
         },
-        assigned_students:
-      assignedStudentCount,
+        assigned_students: assignedStudentCount,
       },
       "Mentor profile and login account created successfully",
       201,
     );
   } catch (error) {
     await transaction.rollback();
+
+    // ✅ Uploaded files delete karo agar error aaya
+    const uploadedFiles = [
+      ...(req.files?.profile_photo || []),
+      ...(req.files?.signature || []),
+    ];
+
+    for (const file of uploadedFiles) {
+      if (file.path && fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    }
+
     throw error;
   }
 });
@@ -2740,13 +2777,24 @@ export const updateMentor = asyncHandler(async (req, res) => {
       mobile,
       email,
       qualification,
-      profile_photo,
       password,
       username,
       domain_id,
       college_id,
       status,
     } = req.body;
+
+    // ✅ NEW: files nikalo
+    const profilePhotoFile = req.files?.profile_photo?.[0];
+    const signatureFile = req.files?.signature?.[0];
+
+    const profilePhotoPath = profilePhotoFile
+      ? `/uploads/mentors/${profilePhotoFile.filename}`
+      : undefined;   // undefined = existing wahi rahega
+
+    const signaturePath = signatureFile
+      ? `/uploads/mentors/${signatureFile.filename}`
+      : undefined;
 
     if (
       status !== undefined &&
@@ -2778,9 +2826,7 @@ export const updateMentor = asyncHandler(async (req, res) => {
     if (employee_id || email) {
       const duplicateMentor = await Mentor.findOne({
         where: {
-          id: {
-            [Op.ne]: mentor.id,
-          },
+          id: { [Op.ne]: mentor.id },
           [Op.or]: [
             ...(employee_id ? [{ employee_id }] : []),
             ...(email ? [{ email }] : []),
@@ -2827,11 +2873,17 @@ export const updateMentor = asyncHandler(async (req, res) => {
     if (qualification !== undefined) {
       mentorPayload.qualification = qualification || null;
     }
-    if (profile_photo !== undefined) {
-      mentorPayload.profile_photo = profile_photo || null;
-    }
     if (status !== undefined) {
       mentorPayload.status = status;
+    }
+
+    // ✅ NEW: files
+    if (profilePhotoPath !== undefined) {
+      mentorPayload.profile_photo = profilePhotoPath;
+    }
+
+    if (signaturePath !== undefined) {
+      mentorPayload.signature = signaturePath;
     }
 
     if (password) {
@@ -2839,9 +2891,7 @@ export const updateMentor = asyncHandler(async (req, res) => {
         await hashPassword(password);
     }
 
-    await mentor.update(mentorPayload, {
-      transaction,
-    });
+    await mentor.update(mentorPayload, { transaction });
 
     const mentorUser = await User.findOne({
       where: {
@@ -2861,43 +2911,42 @@ export const updateMentor = asyncHandler(async (req, res) => {
 
     const userPayload = {};
 
-    if (username !== undefined) {
-      const existingUsername = await User.findOne({
-        where: {
-          username,
-          id: {
-            [Op.ne]: mentorUser.id,
-          },
-        },
-        transaction,
-      });
+   if (
+  username !== undefined &&
+  username !== null &&
+  String(username).trim() !== ""
+) {
+  const trimmedUsername = String(username).trim();
 
-      if (existingUsername) {
-        throw new AppError(
-          "Username already exists",
-          409,
-        );
-      }
+  // ✅ Same username skip karo
+  if (trimmedUsername !== mentorUser.username) {
+    const existingUsername = await User.findOne({
+      where: {
+        username: trimmedUsername,
+        id: { [Op.ne]: mentorUser.id },
+      },
+      transaction,
+    });
 
-      userPayload.username = username;
+    if (existingUsername) {
+      throw new AppError("Username already exists", 409);
     }
+
+    userPayload.username = trimmedUsername;
+  }
+}
 
     if (email !== undefined) {
       const existingEmail = await User.findOne({
         where: {
           email,
-          id: {
-            [Op.ne]: mentorUser.id,
-          },
+          id: { [Op.ne]: mentorUser.id },
         },
         transaction,
       });
 
       if (existingEmail) {
-        throw new AppError(
-          "User email already exists",
-          409,
-        );
+        throw new AppError("User email already exists", 409);
       }
 
       userPayload.email = email;
@@ -2912,14 +2961,11 @@ export const updateMentor = asyncHandler(async (req, res) => {
     }
 
     if (password) {
-      userPayload.password_hash =
-        mentorPayload.password_hash;
+      userPayload.password_hash = mentorPayload.password_hash;
     }
 
     if (Object.keys(userPayload).length > 0) {
-      await mentorUser.update(userPayload, {
-        transaction,
-      });
+      await mentorUser.update(userPayload, { transaction });
     }
 
     await transaction.commit();
@@ -2935,6 +2981,8 @@ export const updateMentor = asyncHandler(async (req, res) => {
           domain_id: mentor.domain_id,
           college_id: mentor.college_id,
           status: mentor.status,
+          profile_photo: mentor.profile_photo,   // ✅ NEW
+          signature: mentor.signature,            // ✅ NEW
         },
         user: {
           id: mentorUser.id,
@@ -2949,6 +2997,19 @@ export const updateMentor = asyncHandler(async (req, res) => {
     );
   } catch (error) {
     await transaction.rollback();
+
+    // ✅ Uploaded files delete karo agar error aaya
+    const uploadedFiles = [
+      ...(req.files?.profile_photo || []),
+      ...(req.files?.signature || []),
+    ];
+
+    for (const file of uploadedFiles) {
+      if (file.path && fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    }
+
     throw error;
   }
 });

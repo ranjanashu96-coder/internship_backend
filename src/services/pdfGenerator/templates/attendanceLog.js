@@ -55,26 +55,26 @@ export const attendanceLogTemplate = ({
   };
 
   // ✅ IMPROVED: Random time generator — har row ke liye alag
-  const generateRandomTime = (type = "in") => {
-    let hour, minute;
+ const generateRandomTime = (type = "in") => {
+  let hour, minute;
 
-    if (type === "in") {
-      // Time In: 8:30 AM - 10:30 AM (120 min range)
-      const totalMinutes = 8 * 60 + 30 + Math.floor(Math.random() * 120);
-      hour = Math.floor(totalMinutes / 60);
-      minute = totalMinutes % 60;
-    } else {
-      // Time Out: 4:30 PM - 6:30 PM (120 min range)
-      const totalMinutes = 16 * 60 + 30 + Math.floor(Math.random() * 120);
-      hour = Math.floor(totalMinutes / 60);
-      minute = totalMinutes % 60;
-    }
+  if (type === "in") {
+    // Time In: 9:00 AM - 9:45 AM (45 min range)
+    const totalMinutes = 9 * 60 + Math.floor(Math.random() * 45);
+    hour = Math.floor(totalMinutes / 60);
+    minute = totalMinutes % 60;
+  } else {
+    // Time Out: 1:30 PM - 2:15 PM (45 min range) → 4.5 hours baad
+    const totalMinutes = 13 * 60 + 30 + Math.floor(Math.random() * 45);
+    hour = Math.floor(totalMinutes / 60);
+    minute = totalMinutes % 60;
+  }
 
-    const period = hour >= 12 ? "PM" : "AM";
-    const displayHour = hour > 12 ? hour - 12 : hour;
+  const period = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour > 12 ? hour - 12 : hour;
 
-    return `${String(displayHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
-  };
+  return `${String(displayHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+};
 
  const rows = attendanceRecords
   .map((record, index) => {

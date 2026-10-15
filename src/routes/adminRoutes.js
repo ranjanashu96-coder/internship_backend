@@ -269,10 +269,43 @@ router.delete(
 |--------------------------------------------------------------------------
 */
 
+/*
+|--------------------------------------------------------------------------
+| Mentors
+|--------------------------------------------------------------------------
+*/
+
+// ✅ NEW: Mentor upload — profile_photo + signature
+const mentorUpload = upload(
+  "mentors",
+  [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ],
+);
+
 router.get("/mentors", list("mentors"));
 router.get("/mentors/:id", getById("mentors"));
-router.post("/mentors", createMentor);
-router.put("/mentors/:id", updateMentor);
+
+router.post(
+  "/mentors",
+  mentorUpload.fields([
+    { name: "profile_photo", maxCount: 1 },
+    { name: "signature", maxCount: 1 },
+  ]),
+  createMentor,
+);
+
+router.put(
+  "/mentors/:id",
+  mentorUpload.fields([
+    { name: "profile_photo", maxCount: 1 },
+    { name: "signature", maxCount: 1 },
+  ]),
+  updateMentor,
+);
+
 router.delete("/mentors/:id", remove("mentors"));
 
 router.get(
@@ -289,7 +322,6 @@ router.post(
   "/mentors/:id/remove-students",
   removeStudentsFromMentor,
 );
-
 /*
 |--------------------------------------------------------------------------
 | Students

@@ -152,13 +152,24 @@ export const createPdfGenerator = ({
 
     return renderDocument({ html, outputPath });
   };
-
- const generateAttendanceLog = async (data) => {
+const generateAttendanceLog = async (data) => {
   const directory = studentDirectory(data.student, outputRoot);
   const outputPath = path.join(directory, "internship-attendance-log.pdf");
+
+  // ✅ NEW: mentor signature data URI
+  const mentorSignaturePath = data.mentor?.signature
+    ? path.resolve(data.mentor.signature.replace(/^\/+/, ""))
+    : null;
+
+  const mentorSignatureDataUri = mentorSignaturePath
+    ? fileToDataUri(mentorSignaturePath)
+    : null;
+
   const html = attendanceLogTemplate({
     ...data,
     ...assetData,
+    // ✅ mentor signature override karo
+    signatureDataUri: mentorSignatureDataUri || assetData.signatureDataUri,
     company: {
       ...organization,
       ...(data.company || {}),
@@ -168,7 +179,7 @@ export const createPdfGenerator = ({
   return renderDocument({
     html,
     outputPath,
-    landscape: false,   // ← portrait for attendance log
+    landscape: false,
   });
 };
 
