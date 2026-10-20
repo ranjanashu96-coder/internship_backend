@@ -17,6 +17,7 @@ import {
 } from "../services/bulkPdfDocumentService.js";
 
 import { getDomainRemarks } from "../config/domainRemarks.js";
+import { getDomainLogbookEntry } from "../config/domainLogbookData.js";
 
 import {
   BulkJob,
@@ -55,6 +56,8 @@ export const BULK_JOB_TYPES = Object.freeze([
   "zip_documents",
   "full_internship_process",
   "quiz_attempts_and_submissions",
+  "department_certificates",   // ✅ NEW
+  "consent_letters",            // ✅ NEW
 ]);
 
 const ZIP_ROOT = path.resolve("uploads", "zips");
@@ -315,7 +318,10 @@ class BulkJobRunner extends EventEmitter {
       attendance_sheets: "Generating Attendance Sheets",
       log_books: "Generating Logbooks",
       certificates: "Generating Certificates",
+      department_certificates: "Generating Department Certificates",
+consent_letters: "Generating Consent Letters",
       zip_documents: "Creating ZIP File",
+      
       full_internship_process: "Running Full Internship Process",
     };
 
@@ -406,6 +412,8 @@ class BulkJobRunner extends EventEmitter {
         attendance_sheets: () => this.generateAttendanceSheets(job),
         log_books: () => this.generateLogBooks(job),
         certificates: () => this.generateCertificates(job),
+        department_certificates: () => this.generateDepartmentCertificates(job),
+consent_letters: () => this.generateConsentLetters(job),
         zip_documents: () => this.generateZip(job),
         full_internship_process: () => this.runFullProcess(job),
       };
@@ -1358,7 +1366,7 @@ class BulkJobRunner extends EventEmitter {
     );
   }
 
-  async publishResults(job, options = {}) {
+   async publishResults(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1389,22 +1397,39 @@ class BulkJobRunner extends EventEmitter {
         );
       }
 
-      const percentage = this.percentageFromAssessment(
-        assessment,
-        payload,
+      // ✅ 1. GENERATE RANDOM SCORE (89% - 95%)
+      const randomScore = Number(
+        (Math.random() * 6 + 89).toFixed(2),
       );
 
-      const passed =
-        percentage >= Number(payload.pass_percentage || 40);
+      // ✅ 2. DETERMINE GRADE BASED ON SCORE
+      let grade = "A+";
+      if (randomScore >= 90) {
+        grade = "A+";
+      } else if (randomScore >= 80) {
+        grade = "A";
+      } else if (randomScore >= 70) {
+        grade = "B+";
+      } else if (randomScore >= 60) {
+        grade = "B";
+      } else if (randomScore >= 50) {
+        grade = "C";
+      } else if (randomScore >= 40) {
+        grade = "D";
+      } else {
+        grade = "F";
+      }
 
+      // ✅ 3. DETERMINE STATUS
+      const passed = randomScore >= Number(payload.pass_percentage || 40);
+
+      // ✅ 4. CREATE/UPDATE RESULT IN DB WITH RANDOM SCORE
       const [result, created] = await Result.findOrCreate({
         where: { student_id: student.id },
         defaults: {
           assessment_id: assessment.id,
-          score_percentage: percentage,
-          grade:
-            payload.grade ||
-            this.gradeFromPercentage(percentage),
+          score_percentage: randomScore, // ✅ RANDOM SCORE
+          grade: grade,                  // ✅ RANDOM GRADE
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1418,10 +1443,8 @@ class BulkJobRunner extends EventEmitter {
       if (!created) {
         await result.update({
           assessment_id: assessment.id,
-          score_percentage: percentage,
-          grade:
-            payload.grade ||
-            this.gradeFromPercentage(percentage),
+          score_percentage: randomScore, // ✅ RANDOM SCORE
+          grade: grade,                  // ✅ RANDOM GRADE
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1430,18 +1453,20 @@ class BulkJobRunner extends EventEmitter {
         });
       }
 
+      // ✅ 5. GENERATE PDF WITH SAME RANDOM SCORE
       const marksheetResult =
         await bulkPdfDocumentService.generateAssessmentMarksheet({
           student,
           assessment,
           result,
           generatedAt: publishedAt,
-          percentage,
-          grade: result.grade,
+          percentage: randomScore,       // ✅ RANDOM SCORE
+          grade: grade,                  // ✅ RANDOM GRADE
           resultStatus: result.result_status,
           performance: assessment.overall_performance,
         });
 
+      // ✅ 6. SAVE GENERATED DOCUMENT
       await this.saveGeneratedDocument(
         student.id,
         "assessment_marksheet",
@@ -1451,8 +1476,8 @@ class BulkJobRunner extends EventEmitter {
           generated_at: publishedAt,
           assessment_id: assessment.id,
           result_id: result.id,
-          percentage,
-          grade: result.grade,
+          percentage: randomScore,
+          grade: grade,
         },
       );
 
@@ -1721,7 +1746,7 @@ class BulkJobRunner extends EventEmitter {
     return result;
   }
 
-  async generateLogBooks(job, options = {}) {
+   async generateLogBooks(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1751,52 +1776,54 @@ class BulkJobRunner extends EventEmitter {
       ) {
         const record = attendance[index];
 
-        const activityFromAttendance =
-          record.remarks &&
-          String(record.remarks).trim() &&
-          String(record.remarks).trim() !== "-"
-            ? String(record.remarks).trim()
-            : null;
+        const domainName = student.domain?.domain_name || "";
 
-        const domainName =
-          student.domain?.domain_name || "";
-        const domainRemarks = getDomainRemarks(domainName);
-        const domainFallback =
-          domainRemarks[index % domainRemarks.length];
+        // ✅ Domain-specific entry (activity + skills)
+        const domainEntry = getDomainLogbookEntry(
+          domainName,
+          index,
+        );
 
+        /*
+         * ✅ PRIORITY 1: Domain logbook entry (activity + skills)
+         * ✅ PRIORITY 2: Attendance remarks
+         * ✅ PRIORITY 3: Payload daily_activity / skills
+         * ✅ PRIORITY 4: Fallback
+         */
         const activity =
-          activityFromAttendance ||
+          domainEntry.activity ||
+          record.remarks ||
           payload.daily_activity ||
-          domainFallback ||
           "Completed assigned learning modules and internship activities.";
 
-        const [entry, created] =
-          await Logbook.findOrCreate({
-            where: {
-              student_id: student.id,
-              date: record.date,
-            },
-            defaults: {
-              activity,
-              skills:
-                payload.skills ||
-                "Technical learning, communication and professional skills",
-              hours_worked: record.learning_hours || 0,
-            },
-          });
+        const skills =
+          domainEntry.skills ||
+          payload.skills ||
+          "Technical learning, communication and professional skills";
+
+        const [entry, created] = await Logbook.findOrCreate({
+          where: {
+            student_id: student.id,
+            date: record.date,
+          },
+          defaults: {
+            activity,
+            skills,
+            hours_worked: record.learning_hours || 0,
+          },
+        });
 
         if (!created) {
           await entry.update({
             activity,
-            skills: payload.skills || entry.skills,
+            skills: skills || entry.skills,
             hours_worked:
-              record.learning_hours ||
-              entry.hours_worked ||
-              0,
+              record.learning_hours || entry.hours_worked || 0,
           });
         }
       }
 
+      // ✅ Fetch final logbook entries
       const entries = await Logbook.findAll({
         where: {
           student_id: student.id,
@@ -1814,6 +1841,7 @@ class BulkJobRunner extends EventEmitter {
         order: [["date", "ASC"]],
       });
 
+      // ✅ Generate PDF
       const documentResult =
         await bulkPdfDocumentService.generateLogbook({
           student,
@@ -1827,6 +1855,7 @@ class BulkJobRunner extends EventEmitter {
 
       const fileUrl = documentResult.file_url;
 
+      // ✅ Save document record
       await this.saveGeneratedDocument(
         student.id,
         "logbook",
@@ -2224,6 +2253,130 @@ class BulkJobRunner extends EventEmitter {
     return result;
   }
 
+  async generateDepartmentCertificates(job, options = {}) {
+  const payload = {
+    ...(job.payload || {}),
+    ...(options.payload || {}),
+  };
+
+  const students = await this.getStudents(payload);
+
+  const generatedAt = this.resolveDateTime(payload.generated_at);
+
+  const files = [];
+  let processed = 0;
+
+  for (const student of students) {
+    await this.assertNotCancelled(job);
+
+    const documentResult =
+      await bulkPdfDocumentService.generateDepartmentCertificate({
+        student,
+        generatedAt,
+        totalHours: Number(
+          payload.total_hours ||
+            student.domain?.duration_hours ||
+            120,
+        ),
+      });
+
+    await this.saveGeneratedDocument(
+      student.id,
+      "department_certificate",
+      documentResult.file_url,
+      job,
+      {
+        generated_at: generatedAt,
+      },
+    );
+
+    files.push({
+      student_id: student.id,
+      file_url: documentResult.file_url,
+    });
+
+    processed += 1;
+
+    if (!options.silent) {
+      await this.updateProgress(job, processed, students.length);
+    }
+  }
+
+  const result = {
+    students: students.length,
+    department_certificates: files.length,
+    files,
+  };
+
+  if (!options.silent) {
+    await this.updateProgress(job, students.length, students.length, result);
+  }
+
+  return result;
+}
+
+async generateConsentLetters(job, options = {}) {
+  const payload = {
+    ...(job.payload || {}),
+    ...(options.payload || {}),
+  };
+
+  const students = await this.getStudents(payload);
+
+  const generatedAt = this.resolveDateTime(payload.generated_at);
+
+  const files = [];
+  let processed = 0;
+
+  for (const student of students) {
+    await this.assertNotCancelled(job);
+
+    const documentResult =
+      await bulkPdfDocumentService.generateConsentLetter({
+        student,
+        generatedAt,
+        totalHours: Number(
+          payload.total_hours ||
+            student.domain?.duration_hours ||
+            120,
+        ),
+      });
+
+    await this.saveGeneratedDocument(
+      student.id,
+      "consent_letter",
+      documentResult.file_url,
+      job,
+      {
+        generated_at: generatedAt,
+      },
+    );
+
+    files.push({
+      student_id: student.id,
+      file_url: documentResult.file_url,
+    });
+
+    processed += 1;
+
+    if (!options.silent) {
+      await this.updateProgress(job, processed, students.length);
+    }
+  }
+
+  const result = {
+    students: students.length,
+    consent_letters: files.length,
+    files,
+  };
+
+  if (!options.silent) {
+    await this.updateProgress(job, students.length, students.length, result);
+  }
+
+  return result;
+}
+
   resolveFilePath(url) {
     if (!url) {
       return null;
@@ -2399,6 +2552,13 @@ class BulkJobRunner extends EventEmitter {
     const payload = job.payload || {};
 
     const steps = [
+      
+      {
+    name: "consent_letters",
+    run: () => this.generateConsentLetters(job, { payload, silent: true }),
+  },
+
+
       {
         name: "acceptance_letters",
         run: () =>
@@ -2479,6 +2639,10 @@ class BulkJobRunner extends EventEmitter {
             silent: true,
           }),
       },
+       {
+    name: "department_certificates",
+    run: () => this.generateDepartmentCertificates(job, { payload, silent: true }),
+  },
       {
         name: "certificates",
         run: () =>

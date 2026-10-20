@@ -17,6 +17,8 @@ import { assessmentMarksheetTemplate } from "./templates/assessmentMarksheet.js"
 import { logbookTemplate } from "./templates/logbook.js";
 import { certificateTemplate } from "./templates/certificate.js";
 import { internshipReportTemplate } from "./templates/internshipReport.js";
+import { departmentCertificateTemplate } from "./templates/departmentCertificate.js";
+import { consentLetterTemplate } from "./templates/consentLetter.js";
 
 const defaultCompany = {
   brand_name: "RK NEXORA",
@@ -71,7 +73,7 @@ const resolveAssets = (assets = {}) => {
       assets.aicte ||
         path.join(
           assetRoot,
-          "aicte.jpeg",
+          "aicte.png",
         ),
     ),
 
@@ -87,7 +89,7 @@ const resolveAssets = (assets = {}) => {
       assets.msme ||
         path.join(
           assetRoot,
-          "msme.jpeg",
+          "msme.png",
         ),
     ),
 
@@ -95,7 +97,7 @@ const resolveAssets = (assets = {}) => {
       assets.mca ||
         path.join(
           assetRoot,
-          "mca.jpeg",
+          "mca.png",
         ),
     ),
   };
@@ -183,19 +185,20 @@ const generateAttendanceLog = async (data) => {
   });
 };
 
-  const generateAssessmentMarksheet = async (data) => {
-    const directory = studentDirectory(data.student, outputRoot);
-    const outputPath = path.join(directory, "assessment-marksheet.pdf");
-    const html = assessmentMarksheetTemplate({
-      ...data,
-      company: {
-        ...organization,
-        ...(data.company || {}),
-      },
-    });
+ const generateAssessmentMarksheet = async (data) => {
+  const directory = studentDirectory(data.student, outputRoot);
+  const outputPath = path.join(directory, "assessment-marksheet.pdf");
+  const html = assessmentMarksheetTemplate({
+    ...data,
+    ...assetData,      // ✅ YE ADD KARO — logo, signature, stamp
+    company: {
+      ...organization,
+      ...(data.company || {}),
+    },
+  });
 
-    return renderDocument({ html, outputPath });
-  };
+  return renderDocument({ html, outputPath });
+};
 
   const generateLogbook = async (data) => {
     const directory = studentDirectory(data.student, outputRoot);
@@ -267,6 +270,38 @@ const generateAttendanceLog = async (data) => {
     };
   };
 
+  const generateDepartmentCertificate = async (data) => {
+  const directory = studentDirectory(data.student, outputRoot);
+  const outputPath = path.join(directory, "department-certificate.pdf");
+
+  const html = departmentCertificateTemplate({
+    ...data,
+    ...assetData,
+    company: {
+      ...organization,
+      ...(data.company || {}),
+    },
+  });
+
+  return renderDocument({ html, outputPath });
+};
+
+const generateConsentLetter = async (data) => {
+  const directory = studentDirectory(data.student, outputRoot);
+  const outputPath = path.join(directory, "consent-letter.pdf");
+
+  const html = consentLetterTemplate({
+    ...data,
+    ...assetData,
+    company: {
+      ...organization,
+      ...(data.company || {}),
+    },
+  });
+
+  return renderDocument({ html, outputPath });
+};
+
   const generateAll = async (data) => {
     const result = {};
 
@@ -313,6 +348,8 @@ const generateAttendanceLog = async (data) => {
     generateLogbook,
     generateInternshipReport,
     generateCertificate,
+    generateDepartmentCertificate,   // ✅ NEW
+  generateConsentLetter,            // ✅ NEW
     generateAll,
     createStudentZip,
   };

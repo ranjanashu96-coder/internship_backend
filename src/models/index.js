@@ -554,6 +554,8 @@ export const GeneratedDocument = define(
         "assessment_marksheet",
         "logbook",
         "certificate",
+        "department_certificates",   // ✅ NEW
+        "consent_letters",            // ✅ NEW
       ),
       allowNull: false,
     },
@@ -1309,6 +1311,8 @@ export const BulkJob = define(
         "attendance_sheets",
         "log_books",
         "certificates",
+        "department_certificate",   // ✅ NEW
+        "consent_letter",            // ✅ NEW
         "zip_documents",
         "full_internship_process",
       ),

@@ -293,13 +293,14 @@ export const certificateTemplate = ({
         color: #1d4fa3;
       }
 
-      /* Bottom Section */
+      /* Bottom Section (Signatures & QR) */
       .bottom {
-        display: grid;
-        grid-template-columns: 120px 1fr 120px;
-        align-items: end;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
         gap: 16px;
-        margin-top: 6px;
+        margin-top: 10px;
+        padding-bottom: 10px;
       }
 
       .qr-section {
@@ -307,6 +308,7 @@ export const certificateTemplate = ({
         font-size: 8px;
         font-weight: 700;
         color: #1d4fa3;
+        width: 120px;
       }
 
       .qr-section img {
@@ -319,8 +321,8 @@ export const certificateTemplate = ({
 
       .qr-section .verify-btn {
         display: inline-block;
-        margin-top: 2px;
-        padding: 2px 10px;
+        margin-top: 4px;
+        padding: 3px 10px;
         background: #1d4fa3;
         color: #ffffff;
         font-size: 7px;
@@ -329,48 +331,66 @@ export const certificateTemplate = ({
         text-decoration: none;
       }
 
+      /* Signatory Section - PERFECTLY ALIGNED */
       .signatory-section {
         display: flex;
-        justify-content: space-around;
+        justify-content: flex-end;
         align-items: flex-end;
-        text-align: center;
-        font-size: 9px;
-        line-height: 1.4;
+        gap: 30px;
+        flex: 1;
+        padding-right: 10px;
       }
 
       .signatory {
-        position: relative;
-        min-height: 80px;
-        padding-top: 60px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
         text-align: center;
         font-size: 9px;
         line-height: 1.4;
+        min-width: 140px;
+        height: 130px; /* Fixed height to align lines */
+      }
+
+      /* Image wrapper to keep images perfectly aligned */
+      .sig-image-wrap {
+        position: relative;
+        height: 60px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        width: 100%;
+        margin-bottom: 4px;
       }
 
       .signatory .signature {
-        position: absolute;
-        top: 20px;
-        left: calc(50% - 35px);
-        width: 70px;
-        max-height: 44px;
+        width: 90px;
+        max-height: 45px;
         object-fit: contain;
       }
 
       .signatory .stamp {
-        position: absolute;
-        top: -10px;
-        left: calc(50% - 44px);
-        width: 88px;
-        max-height: 92px;
+        width: 90px;
+        max-height: 90px;
         object-fit: contain;
+        margin-bottom: -15px; /* Adjust stamp to overlap slightly if needed */
+      }
+
+      .signatory .authorized-text {
+        font-size: 8.5px;
+        margin-top: 2px;
+        margin-bottom: 6px;
+        line-height: 1.3;
       }
 
       .signatory .line {
-        margin-top: 4px;
-        padding-top: 3px;
+        width: 100%;
+        padding-top: 4px;
         border-top: 1px solid #1d4fa3;
         font-weight: 700;
         color: #1d4fa3;
+        font-size: 9px;
       }
 
       /* Footer */
@@ -462,7 +482,6 @@ export const certificateTemplate = ({
               ? `<img class="logo" src="${logoDataUri}" alt="RK Nexora" />`
               : `<div class="fallback-logo">RK NEXORA</div>`
           }
-         
         </div>
         <div class="header-right">
           <div class="contact-item">
@@ -498,20 +517,20 @@ export const certificateTemplate = ({
         <div class="student-name">
           ${escapeHtml(student?.name || "-")}
         </div>
-       <div class="detail">
-  ${
-    student?.father_name
-      ? `S/o or D/o <strong>${escapeHtml(student.father_name)}</strong>,`
-      : `S/o or D/o <strong>[Father's/Guardian's Name]</strong>,`
-  }
-  bearing University Registration / Enrolment No.
-  <strong>${escapeHtml(collegeRegistrationNumber)}</strong> of
-  <strong>${escapeHtml(college?.name || "-")}</strong>,
-  Session <strong>${escapeHtml(student?.session || "-")}</strong>,
-  with Major in <strong>${escapeHtml(student?.major_subject || "-")}</strong>,
-  has successfully completed his/her internship with
-  <strong>${escapeHtml(company?.name || "RK NEXORA Private Limited")}</strong>.
-</div>
+        <div class="detail">
+          ${
+            student?.father_name
+              ? `S/o or D/o <strong>${escapeHtml(student.father_name)}</strong>,`
+              : `S/o or D/o <strong>[Father's/Guardian's Name]</strong>,`
+          }
+          bearing University Registration / Enrolment No.
+          <strong>${escapeHtml(collegeRegistrationNumber)}</strong> of
+          <strong>${escapeHtml(college?.name || "-")}</strong>,
+          Session <strong>${escapeHtml(student?.session || "-")}</strong>,
+          with Major in <strong>${escapeHtml(student?.major_subject || "-")}</strong>,
+          has successfully completed his/her internship with
+          <strong>${escapeHtml(company?.name || "RK NEXORA Private Limited")}</strong>.
+        </div>
 
         <!-- Internship Details -->
         <div style="display: flex; justify-content: space-around; margin-top: 6px; font-size: 10px; color: #152238;">
@@ -537,12 +556,12 @@ export const certificateTemplate = ({
         <!-- Assessment Section -->
         <div class="assessment-section">
           <div class="assessment-header">INTERNSHIP PERFORMANCE ASSESSMENT</div>
-         <div style="font-size: 10px; margin-bottom: 2px;">
-  ${escapeHtml(
-    domainRemarks?.assessment ||
-    "During the internship, the student worked on assigned project(s) and task(s). Based on our observation and mentorship, we assess the student's performance as follows:"
-  )}
-</div>
+          <div style="font-size: 10px; margin-bottom: 2px;">
+            ${escapeHtml(
+              domainRemarks?.assessment ||
+              "During the internship, the student worked on assigned project(s) and task(s). Based on our observation and mentorship, we assess the student's performance as follows:"
+            )}
+          </div>
           <table class="assessment-table">
             <thead>
               <tr>
@@ -582,16 +601,16 @@ export const certificateTemplate = ({
         </div>
 
         <!-- Supervisor Remarks -->
-       <div class="remarks-box">
-  <strong>Supervisor's Remarks:</strong>
-  ${escapeHtml(
-    domainRemarks?.supervisor_remarks ||
-    "The student has shown good understanding of the assigned work, completed tasks sincerely and demonstrated a positive attitude towards learning. Keep up the good work."
-  )}
-</div>
+        <div class="remarks-box">
+          <strong>Supervisor's Remarks:</strong>
+          ${escapeHtml(
+            domainRemarks?.supervisor_remarks ||
+            "The student has shown good understanding of the assigned work, completed tasks sincerely and demonstrated a positive attitude towards learning. Keep up the good work."
+          )}
+        </div>
       </div>
 
-      <!-- Bottom Section -->
+      <!-- Bottom Section (QR & Signatures) -->
       <div class="bottom">
         <!-- QR Code -->
         <div class="qr-section">
@@ -600,41 +619,55 @@ export const certificateTemplate = ({
               ? `<img src="${qrDataUri}" alt="Verification QR" />`
               : ""
           }
-          Scan to Verify<br />This Certificate
+          <div style="margin-top: 4px; font-weight: 700;">Scan to Verify</div>
+          <div>This Certificate</div>
           <a href="#" class="verify-btn">VERIFY NOW</a>
         </div>
 
         <!-- Signatures -->
         <div class="signatory-section">
+          
+          <!-- Mentor Signature -->
           <div class="signatory">
-            ${
-              signatureDataUri
-                ? `<img class="signature" src="${signatureDataUri}" alt="Mentor signature" />`
-                : ""
-            }
+            <div class="sig-image-wrap">
+              ${
+                signatureDataUri
+                  ? `<img class="signature" src="${signatureDataUri}" alt="Mentor signature" />`
+                  : ""
+              }
+            </div>
             <div class="line">Mentor Signature</div>
           </div>
 
+          <!-- Organization Seal -->
           <div class="signatory">
-            ${
-              stampDataUri
-                ? `<img class="stamp" src="${stampDataUri}" alt="Company stamp" />`
-                : ""
-            }
-            <div style="margin-top: 4px; font-size: 8px; color: #1d4fa3;">Organization Seal</div>
+            <div class="sig-image-wrap">
+              ${
+                stampDataUri
+                  ? `<img class="stamp" src="${stampDataUri}" alt="Company stamp" />`
+                  : ""
+              }
+            </div>
+            <div class="line">Organization Seal</div>
           </div>
 
+          <!-- Authorized Signatory -->
           <div class="signatory">
-            ${
-              signatureDataUri
-                ? `<img class="signature" src="${signatureDataUri}" alt="Authorized signature" />`
-                : ""
-            }
-            <strong>${escapeHtml(company?.signatory_name || "Mr. Amarjeet Kumar")}</strong><br />
-            ${escapeHtml(company?.signatory_designation || "Founder & CEO")}<br />
-            RK NEXORA Private Limited
+            <div class="sig-image-wrap">
+              ${
+                signatureDataUri
+                  ? `<img class="signature" src="${signatureDataUri}" alt="Authorized signature" />`
+                  : ""
+              }
+            </div>
+            <div class="authorized-text">
+              <strong>${escapeHtml(company?.signatory_name || "Kumud Bihari")}</strong><br />
+              ${escapeHtml(company?.signatory_designation || "Managing Director")}<br />
+              RK NEXORA Private Limited
+            </div>
             <div class="line">Authorized Signatory</div>
           </div>
+
         </div>
       </div>
 

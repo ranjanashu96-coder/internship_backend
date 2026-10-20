@@ -28,6 +28,8 @@ const DOCUMENT_TYPES = Object.freeze({
   LOGBOOK: "logbook",
   INTERNSHIP_REPORT: "internship_report",
   CERTIFICATE: "certificate",
+  DEPARTMENT_CERTIFICATE: "department_certificate",   // ✅ NEW
+  CONSENT_LETTER: "consent_letter",                    // ✅ NEW
 });
 
 const getDateRangeWhere = (payload = {}) => {
@@ -567,6 +569,55 @@ export const documentAutomationService = {
 
   return generated;
 },
+
+
+async generateDepartmentCertificate(
+  studentId,
+  payload = {},
+  createdBy = null,
+) {
+  const bundle = await loadStudentBundle(studentId, payload);
+
+  const generated = await pdfGenerator.generateDepartmentCertificate(bundle);
+
+  await persistGeneratedDocument({
+    studentId,
+    type: DOCUMENT_TYPES.DEPARTMENT_CERTIFICATE,
+    generated,
+    createdBy,
+    metadata: {
+      domain: bundle.domain.domain_name,
+      duration_hours: bundle.internship.duration_hours,
+    },
+  });
+
+  return generated;
+},
+
+async generateConsentLetter(
+  studentId,
+  payload = {},
+  createdBy = null,
+) {
+  const bundle = await loadStudentBundle(studentId, payload);
+
+  const generated = await pdfGenerator.generateConsentLetter(bundle);
+
+  await persistGeneratedDocument({
+    studentId,
+    type: DOCUMENT_TYPES.CONSENT_LETTER,
+    generated,
+    createdBy,
+    metadata: {
+      domain: bundle.domain.domain_name,
+      duration_hours: bundle.internship.duration_hours,
+    },
+  });
+
+  return generated;
+},
+
+
   async generateAll(
     studentId,
     payload = {},

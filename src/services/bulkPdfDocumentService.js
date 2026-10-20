@@ -564,6 +564,67 @@ class BulkPdfDocumentService {
 
   return normalized;
 }
+
+async generateDepartmentCertificate({
+  student,
+  generatedAt,
+  totalHours = 120,
+  createdBy = null,
+}) {
+  validateStudent(student);
+
+  const generated =
+    await documentAutomationService.generateDepartmentCertificate(
+      student.id,
+      {
+        generated_at: toIsoDateTime(generatedAt),
+        issue_date: toDateOnly(generatedAt),
+        duration_hours: Number(totalHours || 120),
+        total_hours: Number(totalHours || 120),
+      },
+      createdBy,
+    );
+
+  const normalized = normalizeResult(generated);
+
+  if (!normalized.file_url) {
+    throw new Error("Department certificate PDF URL was not returned");
+  }
+
+  return normalized;
+}
+
+async generateConsentLetter({
+  student,
+  generatedAt,
+  totalHours = 120,
+  createdBy = null,
+}) {
+  validateStudent(student);
+
+  const generated =
+    await documentAutomationService.generateConsentLetter(
+      student.id,
+      {
+        generated_at: toIsoDateTime(generatedAt),
+        issue_date: toDateOnly(generatedAt),
+        duration_hours: Number(totalHours || 120),
+        total_hours: Number(totalHours || 120),
+      },
+      createdBy,
+    );
+
+  const normalized = normalizeResult(generated);
+
+  if (!normalized.file_url) {
+    throw new Error("Consent letter PDF URL was not returned");
+  }
+
+  return normalized;
+}
+
+
+
 }
 
 export const bulkPdfDocumentService =
