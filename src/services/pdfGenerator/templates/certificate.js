@@ -521,11 +521,15 @@ export const certificateTemplate = ({
         <div class="student-name">
           ${escapeHtml(student?.name || "-")}
         </div>
-        <div class="detail">
+               <div class="detail">
           ${
             student?.father_name
-              ? `S/o or D/o <strong>${escapeHtml(student.father_name)}</strong>,`
-              : `S/o or D/o <strong>[Father's/Guardian's Name]</strong>,`
+              ? `${
+                  (student.gender || "").toLowerCase() === "female" || (student.gender || "").toLowerCase() === "f"
+                    ? "D/o" 
+                    : "S/o"
+                } <strong>${escapeHtml(student.father_name)}</strong>,`
+              : ""
           }
           bearing University Registration / Enrolment No.
           <strong>${escapeHtml(collegeRegistrationNumber)}</strong> of
