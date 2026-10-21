@@ -1,15 +1,14 @@
 import {
   calculateTotalHours,
   escapeHtml,
-  formatDateNumeric,
-  formatTime,
   numberValue,
 } from "../helpers.js";
 import { baseStyles } from "../baseStyles.js";
 
 export const attendanceLogTemplate = ({
   logoDataUri,
-  signatureDataUri,
+  signatureDataUri,       // MD ka sign
+  mentorSignatureDataUri, // Mentor ka sign (Table ke liye)
   stampDataUri,
   company,
   student,
@@ -35,77 +34,82 @@ export const attendanceLogTemplate = ({
     120,
   );
 
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-  const formatDay = (value) => {
-    if (!value) return "-";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "-";
-    return dayNames[date.getDay()] || "-";
-  };
-
+  // ✅ FIX 1: Timezone safe Date (DD/MM/YYYY)
   const formatDateDMY = (value) => {
     if (!value) return "-";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    const dd = String(date.getDate()).padStart(2, "0");
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const yyyy = date.getFullYear();
-    return `${dd}/${mm}/${yyyy}`;
+    const str = String(value).slice(0, 10);
+    const parts = str.split("-");
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return value;
   };
 
-  // ✅ IMPROVED: Random time generator — har row ke liye alag
- const generateRandomTime = (type = "in") => {
-  let hour, minute;
+  // ✅ FIX 2: Timezone safe Day (Sunday, Monday etc)
+  const formatDay = (value) => {
+    if (!value) return "-";
+    const str = String(value).slice(0, 10);
+    const parts = str.split("-").map(Number);
+    
+    if (parts.length === 3) {
+      const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+      const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      return dayNames[date.getUTCDay()]; 
+    }
+    return "-";
+  };
 
-  if (type === "in") {
-    // Time In: 9:00 AM - 9:45 AM (45 min range)
-    const totalMinutes = 9 * 60 + Math.floor(Math.random() * 45);
-    hour = Math.floor(totalMinutes / 60);
-    minute = totalMinutes % 60;
-  } else {
-    // Time Out: 1:30 PM - 2:15 PM (45 min range) → 4.5 hours baad
-    const totalMinutes = 13 * 60 + 30 + Math.floor(Math.random() * 45);
-    hour = Math.floor(totalMinutes / 60);
-    minute = totalMinutes % 60;
-  }
+  const generateRandomTime = (type = "in") => {
+    let hour, minute;
 
-  const period = hour >= 12 ? "PM" : "AM";
-  const displayHour = hour > 12 ? hour - 12 : hour;
+    if (type === "in") {
+      // Time In: 9:00 AM - 9:45 AM
+      const totalMinutes = 9 * 60 + Math.floor(Math.random() * 45);
+      hour = Math.floor(totalMinutes / 60);
+      minute = totalMinutes % 60;
+    } else {
+      // Time Out: 1:30 PM - 2:15 PM
+      const totalMinutes = 13 * 60 + 30 + Math.floor(Math.random() * 45);
+      hour = Math.floor(totalMinutes / 60);
+      minute = totalMinutes % 60;
+    }
 
-  return `${String(displayHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
-};
+    const period = hour >= 12 ? "PM" : "AM";
+    const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
 
- const rows = attendanceRecords
-  .map((record, index) => {
-    const hours = numberValue(record.learning_hours)
-      .toFixed(1)
-      .replace(/\.0$/, "");
+    return `${String(displayHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+  };
 
-    // ✅ FORCE RANDOM — har row ke liye alag time
-    const timeIn = generateRandomTime("in");
-    const timeOut = generateRandomTime("out");
+  const rows = attendanceRecords
+    .map((record, index) => {
+      const hours = numberValue(record.learning_hours)
+        .toFixed(1)
+        .replace(/\.0$/, "");
 
-    return `
-      <tr>
-        <td class="sl-no">${index + 1}</td>
-        <td class="date-cell">${escapeHtml(formatDateDMY(record.date))}</td>
-        <td class="day-cell">${escapeHtml(formatDay(record.date))}</td>
-        <td class="time-cell">${escapeHtml(timeIn)}</td>
-        <td class="time-cell">${escapeHtml(timeOut)}</td>
-        <td class="hours-cell">${escapeHtml(hours)}</td>
-        <td class="sign-cell">${
-          signatureDataUri
-            ? `<img class="row-signature" src="${signatureDataUri}" alt="" />`
-            : ""
-        }</td>
-        <td class="remarks-cell">${escapeHtml(
-          record.remarks || record.activity || "-",
-        )}</td>
-      </tr>
-    `;
-  })
-  .join("");
+      const timeIn = generateRandomTime("in");
+      const timeOut = generateRandomTime("out");
+
+      return `
+        <tr>
+          <td class="sl-no">${index + 1}</td>
+          <td class="date-cell">${escapeHtml(formatDateDMY(record.date))}</td>
+          <td class="day-cell">${escapeHtml(formatDay(record.date))}</td>
+          <td class="time-cell">${escapeHtml(timeIn)}</td>
+          <td class="time-cell">${escapeHtml(timeOut)}</td>
+          <td class="hours-cell">${escapeHtml(hours)}</td>
+          <td class="sign-cell">${
+            // ✅ FIX 3: Yahan Mentor ka sign aayega
+            mentorSignatureDataUri
+              ? `<img class="row-signature" src="${mentorSignatureDataUri}" alt="" />`
+              : ""
+          }</td>
+          <td class="remarks-cell">${escapeHtml(
+            record.remarks || record.activity || "-",
+          )}</td>
+        </tr>
+      `;
+    })
+    .join("");
 
   return `<!doctype html>
 <html>
@@ -125,19 +129,10 @@ export const attendanceLogTemplate = ({
           margin: 0;
           padding: 0;
         }
-        table {
-          page-break-inside: auto;
-        }
-        tr {
-          page-break-inside: avoid;
-          page-break-after: auto;
-        }
-        thead {
-          display: table-header-group;
-        }
-        tfoot {
-          display: table-footer-group;
-        }
+        table { page-break-inside: auto; }
+        tr { page-break-inside: avoid; page-break-after: auto; }
+        thead { display: table-header-group; }
+        tfoot { display: table-footer-group; }
       }
 
       * { box-sizing: border-box; }
@@ -290,9 +285,7 @@ export const attendanceLogTemplate = ({
         page-break-inside: auto;
       }
 
-      tfoot {
-        display: table-footer-group;
-      }
+      tfoot { display: table-footer-group; }
 
       table {
         width: 100%;
@@ -383,18 +376,19 @@ export const attendanceLogTemplate = ({
         max-width: 55%;
       }
 
+      /* ✅ FIX 4: Stamp aur Sign ki jagah badhayi taaki kat na paye */
       .signatory-block {
         text-align: center;
         position: relative;
         min-width: 220px;
-        padding-top: 90px;
+        padding-top: 140px; /* Pehle 90px tha */
         page-break-inside: avoid;
         break-inside: avoid;
       }
 
       .signatory-block .signature-img {
         position: absolute;
-        top: 35px;
+        top: 65px; /* Pehle 35px tha */
         left: 50%;
         transform: translateX(-50%);
         width: 80px;
@@ -405,7 +399,7 @@ export const attendanceLogTemplate = ({
 
       .signatory-block .stamp-img {
         position: absolute;
-        top: 5px;
+        top: 15px; /* Pehle 5px tha */
         left: 50%;
         transform: translateX(-50%);
         width: 80px;

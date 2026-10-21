@@ -158,7 +158,7 @@ const generateAttendanceLog = async (data) => {
   const directory = studentDirectory(data.student, outputRoot);
   const outputPath = path.join(directory, "internship-attendance-log.pdf");
 
-  // ✅ NEW: mentor signature data URI
+  // Mentor ka signature
   const mentorSignaturePath = data.mentor?.signature
     ? path.resolve(data.mentor.signature.replace(/^\/+/, ""))
     : null;
@@ -170,8 +170,9 @@ const generateAttendanceLog = async (data) => {
   const html = attendanceLogTemplate({
     ...data,
     ...assetData,
-    // ✅ mentor signature override karo
-    signatureDataUri: mentorSignatureDataUri || assetData.signatureDataUri,
+    // ✅ Table me Mentor ka sign, Footer me MD ka sign
+    mentorSignatureDataUri: mentorSignatureDataUri,
+    signatureDataUri: assetData.signatureDataUri, 
     company: {
       ...organization,
       ...(data.company || {}),
