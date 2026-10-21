@@ -9,24 +9,58 @@ export const escapeHtml = (value) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 
+// ✅ FIXED: Timezone-safe formatDate (DD Month YYYY)
 export const formatDate = (value) => {
   if (!value) return "-";
+  
+  // अगर तारीख YYYY-MM-DD फॉर्मेट में है
+  const str = String(value).slice(0, 10);
+  const parts = str.split("-");
+  
+  if (parts.length === 3) {
+    const [year, month, day] = parts;
+    const months = [
+      "January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"
+    ];
+    const monthName = months[parseInt(month, 10) - 1];
+    return `${day} ${monthName} ${year}`;
+  }
+  
+  // फॉलबैक
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit",
     month: "long",
     year: "numeric",
+    timeZone: "Asia/Kolkata" // ✅ Force IST
   }).format(date);
 };
 
+// ✅ FIXED: Timezone-safe formatDateNumeric (DD/MM/YYYY)
 export const formatDateNumeric = (value) => {
   if (!value) return "-";
+  
+  // अगर तारीख YYYY-MM-DD फॉर्मेट में है
+  const str = String(value).slice(0, 10);
+  const parts = str.split("-");
+  
+  if (parts.length === 3) {
+    const [year, month, day] = parts;
+    return `${day}/${month}/${year}`;
+  }
+  
+  // फॉलबैक
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return `${String(date.getDate()).padStart(2, "0")}/${String(
-    date.getMonth() + 1,
-  ).padStart(2, "0")}/${date.getFullYear()}`;
+  
+  // ✅ Timezone safe extraction
+  const day = String(date.toLocaleString("en-US", { day: "2-digit", timeZone: "Asia/Kolkata" }));
+  const month = String(date.toLocaleString("en-US", { month: "2-digit", timeZone: "Asia/Kolkata" }));
+  const year = date.toLocaleString("en-US", { year: "numeric", timeZone: "Asia/Kolkata" });
+  
+  return `${day}/${month}/${year}`;
 };
 
 export const formatTime = (value) => {
