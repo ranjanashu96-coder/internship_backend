@@ -12,6 +12,7 @@ export const certificateTemplate = ({
   signatureDataUri,
   stampDataUri,
   qrDataUri,
+  mentorSignatureDataUri,
 
   aicteDataUri,
   isoDataUri,
@@ -628,11 +629,11 @@ export const certificateTemplate = ({
         <div class="signatory-section">
           
           <!-- Mentor Signature -->
-          <div class="signatory">
-            <div class="sig-image-wrap">
+           <div class="sig-image-wrap">
               ${
-                signatureDataUri
-                  ? `<img class="signature" src="${signatureDataUri}" alt="Mentor signature" />`
+                // ✅ Yahan mentorSignatureDataUri use karo
+                (mentorSignatureDataUri || signatureDataUri)
+                  ? `<img class="signature" src="${mentorSignatureDataUri || signatureDataUri}" alt="Mentor signature" />`
                   : ""
               }
             </div>

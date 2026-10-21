@@ -200,12 +200,24 @@ const generateAttendanceLog = async (data) => {
   return renderDocument({ html, outputPath });
 };
 
-  const generateLogbook = async (data) => {
+   const generateLogbook = async (data) => {
     const directory = studentDirectory(data.student, outputRoot);
     const outputPath = path.join(directory, "internship-logbook.pdf");
+
+    // ✅ NEW: Mentor ka signature process karo
+    const mentorSignaturePath = data.mentor?.signature
+      ? path.resolve(data.mentor.signature.replace(/^\/+/, ""))
+      : null;
+
+    const mentorSignatureDataUri = mentorSignaturePath
+      ? fileToDataUri(mentorSignaturePath)
+      : null;
+
     const html = logbookTemplate({
       ...data,
       ...assetData,
+      // ✅ Naya variable pass karo (Authorized signatory change nahi hoga)
+      mentorSignatureDataUri: mentorSignatureDataUri || assetData.signatureDataUri,
       company: {
         ...organization,
         ...(data.company || {}),
@@ -230,27 +242,33 @@ const generateAttendanceLog = async (data) => {
     return renderDocument({ html, outputPath });
   };
 
-  const generateCertificate = async (data) => {
+   const generateCertificate = async (data) => {
     const directory = studentDirectory(data.student, outputRoot);
     const outputPath = path.join(directory, "internship-certificate.pdf");
     const qrPath = path.join(directory, "certificate-verification-qr.png");
 
-    await QRCode.toFile(
-      qrPath,
-      data.certificate.verification_url,
-      {
-        width: 500,
-        margin: 2,
-        errorCorrectionLevel: "H",
-      },
-    );
+    await QRCode.toFile(qrPath, data.certificate.verification_url, {
+      width: 500,
+      margin: 2,
+      errorCorrectionLevel: "H",
+    });
 
     const qrDataUri = fileToDataUri(qrPath);
+
+    // ✅ NEW: Mentor ka signature process karo
+    const mentorSignaturePath = data.mentor?.signature
+      ? path.resolve(data.mentor.signature.replace(/^\/+/, ""))
+      : null;
+
+    const mentorSignatureDataUri = mentorSignaturePath
+      ? fileToDataUri(mentorSignaturePath)
+      : null;
 
     const html = certificateTemplate({
       ...data,
       ...assetData,
       qrDataUri,
+      mentorSignatureDataUri, // 👈 Mentor signature pass karo
       company: {
         ...organization,
         ...(data.company || {}),

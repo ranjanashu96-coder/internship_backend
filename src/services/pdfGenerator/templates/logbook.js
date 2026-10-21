@@ -9,6 +9,7 @@ import { baseStyles } from "../baseStyles.js";
 export const logbookTemplate = ({
   logoDataUri,
   signatureDataUri,
+   mentorSignatureDataUri,
   stampDataUri,
   company,
   student,
@@ -39,9 +40,10 @@ export const logbookTemplate = ({
         <td class="hours-cell">${escapeHtml(
           numberValue(entry.hours_worked).toFixed(2).replace(/\.00$/, ""),
         )}</td>
-        <td class="sign-cell">${
-          signatureDataUri
-            ? `<img class="row-signature" src="${signatureDataUri}" alt="Signature" />`
+       <td class="sign-cell">${
+          // ✅ Yahan mentorSignatureDataUri use karo
+          mentorSignatureDataUri
+            ? `<img class="row-signature" src="${mentorSignatureDataUri}" alt="Mentor Signature" />`
             : ""
         }</td>
       </tr>`,

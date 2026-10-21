@@ -707,16 +707,14 @@ class BulkJobRunner extends EventEmitter {
   }
 
   // ✅ FIXED: 4.5 default, learning_hours safety AND Domain Remarks
-  async generateAttendance(job, options = {}) {
+    async generateAttendance(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
     };
 
     if (!payload.start_date || !payload.end_date) {
-      throw new Error(
-        "start_date and end_date are required",
-      );
+      throw new Error("start_date and end_date are required");
     }
 
     const students = await this.getStudents(payload);
@@ -728,40 +726,40 @@ class BulkJobRunner extends EventEmitter {
     );
 
     const loginTime = payload.login_time || "09:00:00";
-    // ✅ DEFAULT: 4.5 hours (09:00 → 13:30)
     const logoutTime = payload.logout_time || "13:30:00";
 
-    // ✅ learning_hours: payload me diya to wo, warna calculate
     let learningHours;
-
-    if (
-      payload.learning_hours !== undefined &&
-      payload.learning_hours !== null &&
-      payload.learning_hours !== ""
-    ) {
+    if (payload.learning_hours !== undefined && payload.learning_hours !== null && payload.learning_hours !== "") {
       learningHours = Number(payload.learning_hours);
     } else {
       learningHours = calculateHours(loginTime, logoutTime);
     }
 
-    // ✅ Safety: agar NaN ya <= 0 hai to 4.5 default
     if (!Number.isFinite(learningHours) || learningHours <= 0) {
       learningHours = 4.5;
     }
 
+    // ✅ FIX 1: Holidays ko ek Set me daalo
+    const holidays = new Set(
+      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
+    );
+
     const rows = [];
 
     for (const student of students) {
-      // ✅ FIX: Logbook fetch karna band kar diya
-      // Ab sirf domainRemarks.js wali file se remarks aayenge
-      
       const domainName = student.domain?.domain_name || "";
       const domainRemarks = getDomainRemarks(domainName);
 
       for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
         const date = dates[dayIndex];
+        const dateStr = String(date).slice(0, 10); // Ensure YYYY-MM-DD
 
-        // ✅ Sirf domain remarks use honge
+        // ✅ FIX 2: Agar date holiday hai, to SKIP karo
+        if (holidays.has(dateStr)) {
+          console.log(`🚫 Skipping holiday for attendance: ${dateStr}`);
+          continue;
+        }
+
         const remarks =
           domainRemarks[dayIndex % domainRemarks.length] ||
           payload.daily_activity ||
@@ -770,7 +768,7 @@ class BulkJobRunner extends EventEmitter {
 
         rows.push({
           student_id: student.id,
-          date,
+          date: dateStr,
           login_time: loginTime,
           logout_time: logoutTime,
           learning_hours: learningHours,
@@ -780,16 +778,23 @@ class BulkJobRunner extends EventEmitter {
       }
     }
 
+    // ✅ FIX 3: Pehle se bani hui galat (holiday) entries ko database se DELETE karo
+    if (holidays.size > 0) {
+      const studentIds = students.map((s) => s.id);
+      await Attendance.destroy({
+        where: {
+          student_id: { [Op.in]: studentIds },
+          date: { [Op.in]: Array.from(holidays) },
+        },
+      });
+      console.log(`🧹 Cleaned up old holiday entries for dates:`, Array.from(holidays));
+    }
+
     const batchSize = 1000;
     let processed = 0;
 
-    for (
-      let index = 0;
-      index < rows.length;
-      index += batchSize
-    ) {
+    for (let index = 0; index < rows.length; index += batchSize) {
       await this.assertNotCancelled(job);
-
       const batch = rows.slice(index, index + batchSize);
 
       await Attendance.bulkCreate(batch, {
@@ -806,29 +811,20 @@ class BulkJobRunner extends EventEmitter {
       processed += batch.length;
 
       if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          rows.length,
-        );
+        await this.updateProgress(job, processed, rows.length);
       }
     }
 
     const result = {
       students: students.length,
-      working_days: dates.length,
+      working_days: dates.length - holidays.size,
       attendance_records: rows.length,
       start_date: payload.start_date,
       end_date: payload.end_date,
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        rows.length,
-        rows.length,
-        result,
-      );
+      await this.updateProgress(job, rows.length, rows.length, result);
     }
 
     return result;
@@ -1722,16 +1718,18 @@ class BulkJobRunner extends EventEmitter {
     return result;
   }
 
-  async generateLogBooks(job, options = {}) {
+   async generateLogBooks(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
     };
 
     const students = await this.getStudents(payload);
+    const generatedAt = this.resolveDateTime(payload.generated_at);
 
-    const generatedAt = this.resolveDateTime(
-      payload.generated_at,
+    // ✅ FIX 1: Holidays ko Set me daalo
+    const holidays = new Set(
+      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
     );
 
     const files = [];
@@ -1740,25 +1738,17 @@ class BulkJobRunner extends EventEmitter {
     for (const student of students) {
       await this.assertNotCancelled(job);
 
-      const attendance = await this.getAttendance(
-        student.id,
-        payload,
+      const attendance = await this.getAttendance(student.id, payload);
+
+      // ✅ FIX 2: Attendance records me se holidays hata do
+      const validAttendance = attendance.filter(
+        (record) => !holidays.has(String(record.date).slice(0, 10))
       );
 
-      for (
-        let index = 0;
-        index < attendance.length;
-        index += 1
-      ) {
-        const record = attendance[index];
-
+      for (let index = 0; index < validAttendance.length; index += 1) {
+        const record = validAttendance[index];
         const domainName = student.domain?.domain_name || "";
-
-        // ✅ Domain-specific entry (activity + skills)
-        const domainEntry = getDomainLogbookEntry(
-          domainName,
-          index,
-        );
+        const domainEntry = getDomainLogbookEntry(domainName, index);
 
         const activity =
           domainEntry.activity ||
@@ -1787,10 +1777,19 @@ class BulkJobRunner extends EventEmitter {
           await entry.update({
             activity,
             skills: skills || entry.skills,
-            hours_worked:
-              record.learning_hours || entry.hours_worked || 0,
+            hours_worked: record.learning_hours || entry.hours_worked || 0,
           });
         }
+      }
+
+      // ✅ FIX 3: Agar pehle se koi holiday ki logbook entry padi hai, to use bhi delete karo
+      if (holidays.size > 0) {
+        await Logbook.destroy({
+          where: {
+            student_id: student.id,
+            date: { [Op.in]: Array.from(holidays) },
+          },
+        });
       }
 
       // ✅ Fetch final logbook entries
@@ -1800,10 +1799,7 @@ class BulkJobRunner extends EventEmitter {
           ...(payload.start_date && payload.end_date
             ? {
                 date: {
-                  [Op.between]: [
-                    payload.start_date,
-                    payload.end_date,
-                  ],
+                  [Op.between]: [payload.start_date, payload.end_date],
                 },
               }
             : {}),
@@ -1812,20 +1808,15 @@ class BulkJobRunner extends EventEmitter {
       });
 
       // ✅ Generate PDF
-      const documentResult =
-        await bulkPdfDocumentService.generateLogbook({
-          student,
-          entries,
-          generatedAt,
-          supervisorName:
-            student.mentor?.name ||
-            payload.supervisor_name ||
-            "Rahul Kumar",
-        });
+      const documentResult = await bulkPdfDocumentService.generateLogbook({
+        student,
+        entries,
+        generatedAt,
+        supervisorName: student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
+      });
 
       const fileUrl = documentResult.file_url;
 
-      // ✅ Save document record
       await this.saveGeneratedDocument(
         student.id,
         "logbook",
@@ -1845,11 +1836,7 @@ class BulkJobRunner extends EventEmitter {
       processed += 1;
 
       if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+        await this.updateProgress(job, processed, students.length);
       }
     }
 
@@ -1860,12 +1847,7 @@ class BulkJobRunner extends EventEmitter {
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, students.length, students.length, result);
     }
 
     return result;
