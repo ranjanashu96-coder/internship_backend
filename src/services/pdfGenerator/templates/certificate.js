@@ -365,9 +365,12 @@ export const certificateTemplate = ({
         margin-bottom: 4px;
       }
 
+      /* ✅ FIX: Image size issue resolved here */
       .signatory .signature {
-        width: 90px;
-        max-height: 45px;
+        max-width: 120px;  /* Restrict max width */
+        max-height: 45px;  /* Restrict max height */
+        width: auto;       /* Maintain aspect ratio */
+        height: auto;      /* Maintain aspect ratio */
         object-fit: contain;
       }
 
@@ -628,10 +631,10 @@ export const certificateTemplate = ({
         <!-- Signatures -->
         <div class="signatory-section">
           
-          <!-- Mentor Signature -->
-           <div class="sig-image-wrap">
+          <!-- ✅ FIX: Mentor Signature (Div structure fixed) -->
+          <div class="signatory">
+            <div class="sig-image-wrap">
               ${
-                // ✅ Yahan mentorSignatureDataUri use karo
                 (mentorSignatureDataUri || signatureDataUri)
                   ? `<img class="signature" src="${mentorSignatureDataUri || signatureDataUri}" alt="Mentor signature" />`
                   : ""

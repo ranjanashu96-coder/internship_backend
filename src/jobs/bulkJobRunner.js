@@ -470,7 +470,7 @@ class BulkJobRunner extends EventEmitter {
       throw new Error(`${fieldName} is required`);
     }
 
-    const date = new Date(value);
+    const date = new Date(`${value}T00:00:00`);
 
     if (Number.isNaN(date.getTime())) {
       throw new Error(`${fieldName} is invalid`);
@@ -491,77 +491,44 @@ class BulkJobRunner extends EventEmitter {
 
   // ✅ FIXED: Timezone-safe date range
   dateRange(startDate, endDate, payload = {}) {
-    const start = this.parseDate(
-      `${startDate}T00:00:00`,
-      "start_date",
-    );
+    if (!startDate || !endDate) {
+      throw new Error("start_date and end_date are required");
+    }
 
-    const end = this.parseDate(
-      `${endDate}T00:00:00`,
-      "end_date",
-    );
+    const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
+    const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
 
-    if (start > end) {
+    if (!startYear || !startMonth || !startDay || !endYear || !endMonth || !endDay) {
+      throw new Error("Invalid date format. Use YYYY-MM-DD");
+    }
+
+    let current = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+    const end = new Date(Date.UTC(endYear, endMonth - 1, endDay));
+
+    if (current > end) {
       throw new Error("start_date cannot be after end_date");
     }
 
-    // ✅ FIXED: Sunday ALWAYS excluded
-    let excludedDays = [0]; // Sunday default
-
-    if (
-      Array.isArray(payload.excluded_days) &&
-      payload.excluded_days.length > 0
-    ) {
-      const payloadDays = payload.excluded_days.map(Number);
-      excludedDays = [...new Set([0, ...payloadDays])];
-    }
-
-    excludedDays = [...new Set([0, ...excludedDays])];
-
-    console.log("🗓️ DATE RANGE DEBUG:", {
-      start_date: startDate,
-      end_date: endDate,
-      payload_excluded_days: payload.excluded_days,
-      final_excluded_days: excludedDays,
-    });
-
+    const excludedDays = [0]; // Sunday
+    
     const holidays = new Set(
-      Array.isArray(payload.holidays) ? payload.holidays : [],
+      Array.isArray(payload.holidays) 
+        ? payload.holidays.map(h => String(h).trim()) 
+        : []
     );
 
     const dates = [];
 
-    for (
-      let current = new Date(start);
-      current <= end;
-      current.setDate(current.getDate() + 1)
-    ) {
-      const year = current.getFullYear();
-      const month = String(current.getMonth() + 1).padStart(2, "0");
-      const day = String(current.getDate()).padStart(2, "0");
-      const date = `${year}-${month}-${day}`;
+    while (current <= end) {
+      const dateStr = current.toISOString().slice(0, 10); 
+      const dayOfWeek = current.getUTCDay(); // 0 = Sunday
 
-      const dayOfWeek = current.getDay();
-
-      if (
-        !excludedDays.includes(dayOfWeek) &&
-        !holidays.has(date)
-      ) {
-        dates.push(date);
+      if (!excludedDays.includes(dayOfWeek) && !holidays.has(dateStr)) {
+        dates.push(dateStr);
       }
+
+      current.setUTCDate(current.getUTCDate() + 1);
     }
-
-    const sundays = dates.filter((d) => {
-      const dt = new Date(`${d}T00:00:00`);
-      return dt.getDay() === 0;
-    });
-
-    console.log("🗓️ DATES GENERATED:", {
-      total: dates.length,
-      first_5: dates.slice(0, 5),
-      last_5: dates.slice(-5),
-      sundays_count: sundays.length,
-    });
 
     return dates;
   }
@@ -706,8 +673,7 @@ class BulkJobRunner extends EventEmitter {
     return students;
   }
 
-  // ✅ FIXED: 4.5 default, learning_hours safety AND Domain Remarks
-    async generateAttendance(job, options = {}) {
+  async generateAttendance(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -739,7 +705,6 @@ class BulkJobRunner extends EventEmitter {
       learningHours = 4.5;
     }
 
-    // ✅ FIX 1: Holidays ko ek Set me daalo
     const holidays = new Set(
       Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
     );
@@ -752,11 +717,9 @@ class BulkJobRunner extends EventEmitter {
 
       for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
         const date = dates[dayIndex];
-        const dateStr = String(date).slice(0, 10); // Ensure YYYY-MM-DD
+        const dateStr = String(date).slice(0, 10);
 
-        // ✅ FIX 2: Agar date holiday hai, to SKIP karo
         if (holidays.has(dateStr)) {
-          console.log(`🚫 Skipping holiday for attendance: ${dateStr}`);
           continue;
         }
 
@@ -778,7 +741,6 @@ class BulkJobRunner extends EventEmitter {
       }
     }
 
-    // ✅ FIX 3: Pehle se bani hui galat (holiday) entries ko database se DELETE karo
     if (holidays.size > 0) {
       const studentIds = students.map((s) => s.id);
       await Attendance.destroy({
@@ -787,7 +749,6 @@ class BulkJobRunner extends EventEmitter {
           date: { [Op.in]: Array.from(holidays) },
         },
       });
-      console.log(`🧹 Cleaned up old holiday entries for dates:`, Array.from(holidays));
     }
 
     const batchSize = 1000;
@@ -817,7 +778,7 @@ class BulkJobRunner extends EventEmitter {
 
     const result = {
       students: students.length,
-      working_days: dates.length - holidays.size,
+      working_days: dates.length,
       attendance_records: rows.length,
       start_date: payload.start_date,
       end_date: payload.end_date,
@@ -1103,6 +1064,12 @@ class BulkJobRunner extends EventEmitter {
     for (const student of students) {
       await this.assertNotCancelled(job);
 
+      let endDate = payload.end_date || (completedAt ? completedAt.toISOString().slice(0, 10) : null);
+      
+      if (endDate === "" || endDate === undefined) {
+        endDate = null;
+      }
+
       const academics = {
         ...(student.academics_json || {}),
         internship_completion: {
@@ -1113,9 +1080,7 @@ class BulkJobRunner extends EventEmitter {
 
       await student.update({
         internship_status: "completed",
-        internship_end_date:
-          payload.end_date ||
-          completedAt.toISOString().slice(0, 10),
+        internship_end_date: endDate,
         total_progress: 100,
         academics_json: academics,
       });
@@ -1718,7 +1683,7 @@ class BulkJobRunner extends EventEmitter {
     return result;
   }
 
-   async generateLogBooks(job, options = {}) {
+  async generateLogBooks(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1727,7 +1692,6 @@ class BulkJobRunner extends EventEmitter {
     const students = await this.getStudents(payload);
     const generatedAt = this.resolveDateTime(payload.generated_at);
 
-    // ✅ FIX 1: Holidays ko Set me daalo
     const holidays = new Set(
       Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
     );
@@ -1740,7 +1704,6 @@ class BulkJobRunner extends EventEmitter {
 
       const attendance = await this.getAttendance(student.id, payload);
 
-      // ✅ FIX 2: Attendance records me se holidays hata do
       const validAttendance = attendance.filter(
         (record) => !holidays.has(String(record.date).slice(0, 10))
       );
@@ -1782,7 +1745,6 @@ class BulkJobRunner extends EventEmitter {
         }
       }
 
-      // ✅ FIX 3: Agar pehle se koi holiday ki logbook entry padi hai, to use bhi delete karo
       if (holidays.size > 0) {
         await Logbook.destroy({
           where: {
@@ -1792,7 +1754,6 @@ class BulkJobRunner extends EventEmitter {
         });
       }
 
-      // ✅ Fetch final logbook entries
       const entries = await Logbook.findAll({
         where: {
           student_id: student.id,
@@ -1807,7 +1768,6 @@ class BulkJobRunner extends EventEmitter {
         order: [["date", "ASC"]],
       });
 
-      // ✅ Generate PDF
       const documentResult = await bulkPdfDocumentService.generateLogbook({
         student,
         entries,
@@ -1853,7 +1813,7 @@ class BulkJobRunner extends EventEmitter {
     return result;
   }
 
-      async generateInternshipReports(job, options = {}) {
+  async generateInternshipReports(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1863,7 +1823,6 @@ class BulkJobRunner extends EventEmitter {
     const files = [];
     let processed = 0;
 
-    // ✅ FIX: Static reports folder in assets (survives deployment)
     const STATIC_REPORTS_DIR = path.resolve("src", "assets", "static-reports");
 
     for (const student of students) {
@@ -1871,10 +1830,8 @@ class BulkJobRunner extends EventEmitter {
 
       const domainName = student.domain?.domain_name || "";
       
-      // ✅ Look for PDF matching domain name
       let sourcePdfPath = path.join(STATIC_REPORTS_DIR, `${domainName}.pdf`);
       
-      // ✅ Fallback: fuzzy match if exact name fails
       if (!fs.existsSync(sourcePdfPath)) {
         const filesInDir = fs.readdirSync(STATIC_REPORTS_DIR);
         const matchedFile = filesInDir.find(file => {
@@ -1899,7 +1856,6 @@ class BulkJobRunner extends EventEmitter {
         continue;
       }
 
-      // ✅ Copy into student's generated folder
       const studentFolder = this.studentFolder(student);
       const destinationDir = path.resolve("uploads", "generated", studentFolder);
       
@@ -1912,7 +1868,6 @@ class BulkJobRunner extends EventEmitter {
 
       const fileUrl = toPublicUrl(destinationPath);
 
-      // ✅ Save DB record
       const [report, created] = await InternshipReport.findOrCreate({
         where: { student_id: student.id },
         defaults: {
@@ -1993,16 +1948,6 @@ class BulkJobRunner extends EventEmitter {
           student.id,
           student.domain_id,
         );
-
-        console.log("CERTIFICATE ELIGIBILITY:", {
-          student_id: student.id,
-          registration_number: student.registration_number,
-          portal_registration_number:
-            student.portal_registration_number,
-          eligible: eligibility.eligible,
-          reasons: eligibility.reasons,
-          eligibility,
-        });
 
         if (!eligibility.eligible) {
           const reason =
