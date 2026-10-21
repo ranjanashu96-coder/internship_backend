@@ -56,8 +56,8 @@ export const BULK_JOB_TYPES = Object.freeze([
   "zip_documents",
   "full_internship_process",
   "quiz_attempts_and_submissions",
-  "department_certificates",   // ✅ NEW
-  "consent_letters",            // ✅ NEW
+  "department_certificates",
+  "consent_letters",
 ]);
 
 const ZIP_ROOT = path.resolve("uploads", "zips");
@@ -319,9 +319,8 @@ class BulkJobRunner extends EventEmitter {
       log_books: "Generating Logbooks",
       certificates: "Generating Certificates",
       department_certificates: "Generating Department Certificates",
-consent_letters: "Generating Consent Letters",
+      consent_letters: "Generating Consent Letters",
       zip_documents: "Creating ZIP File",
-      
       full_internship_process: "Running Full Internship Process",
     };
 
@@ -413,7 +412,7 @@ consent_letters: "Generating Consent Letters",
         log_books: () => this.generateLogBooks(job),
         certificates: () => this.generateCertificates(job),
         department_certificates: () => this.generateDepartmentCertificates(job),
-consent_letters: () => this.generateConsentLetters(job),
+        consent_letters: () => this.generateConsentLetters(job),
         zip_documents: () => this.generateZip(job),
         full_internship_process: () => this.runFullProcess(job),
       };
@@ -491,85 +490,81 @@ consent_letters: () => this.generateConsentLetters(job),
   }
 
   // ✅ FIXED: Timezone-safe date range
- dateRange(startDate, endDate, payload = {}) {
-  const start = this.parseDate(
-    `${startDate}T00:00:00`,
-    "start_date",
-  );
+  dateRange(startDate, endDate, payload = {}) {
+    const start = this.parseDate(
+      `${startDate}T00:00:00`,
+      "start_date",
+    );
 
-  const end = this.parseDate(
-    `${endDate}T00:00:00`,
-    "end_date",
-  );
+    const end = this.parseDate(
+      `${endDate}T00:00:00`,
+      "end_date",
+    );
 
-  if (start > end) {
-    throw new Error("start_date cannot be after end_date");
-  }
+    if (start > end) {
+      throw new Error("start_date cannot be after end_date");
+    }
 
-  // ✅ FIXED: Sunday ALWAYS excluded
-  // Chahe payload kuch bhi bheje, Sunday hamesha exclude hoga
-  let excludedDays = [0]; // Sunday default
-
-  if (
-    Array.isArray(payload.excluded_days) &&
-    payload.excluded_days.length > 0
-  ) {
-    const payloadDays = payload.excluded_days.map(Number);
-    // ✅ Merge: payload + Sunday
-    excludedDays = [...new Set([0, ...payloadDays])];
-  }
-
-  // ✅ Extra safety: Agar user ne Sunday explicitly remove kiya ho
-  // tab bhi Sunday exclude rahega (kyunki hum enforce kar rahe hain)
-  excludedDays = [...new Set([0, ...excludedDays])];
-
-  console.log("🗓️ DATE RANGE DEBUG:", {
-    start_date: startDate,
-    end_date: endDate,
-    payload_excluded_days: payload.excluded_days,
-    final_excluded_days: excludedDays,
-  });
-
-  const holidays = new Set(
-    Array.isArray(payload.holidays) ? payload.holidays : [],
-  );
-
-  const dates = [];
-
-  for (
-    let current = new Date(start);
-    current <= end;
-    current.setDate(current.getDate() + 1)
-  ) {
-    const year = current.getFullYear();
-    const month = String(current.getMonth() + 1).padStart(2, "0");
-    const day = String(current.getDate()).padStart(2, "0");
-    const date = `${year}-${month}-${day}`;
-
-    const dayOfWeek = current.getDay();
+    // ✅ FIXED: Sunday ALWAYS excluded
+    let excludedDays = [0]; // Sunday default
 
     if (
-      !excludedDays.includes(dayOfWeek) &&
-      !holidays.has(date)
+      Array.isArray(payload.excluded_days) &&
+      payload.excluded_days.length > 0
     ) {
-      dates.push(date);
+      const payloadDays = payload.excluded_days.map(Number);
+      excludedDays = [...new Set([0, ...payloadDays])];
     }
+
+    excludedDays = [...new Set([0, ...excludedDays])];
+
+    console.log("🗓️ DATE RANGE DEBUG:", {
+      start_date: startDate,
+      end_date: endDate,
+      payload_excluded_days: payload.excluded_days,
+      final_excluded_days: excludedDays,
+    });
+
+    const holidays = new Set(
+      Array.isArray(payload.holidays) ? payload.holidays : [],
+    );
+
+    const dates = [];
+
+    for (
+      let current = new Date(start);
+      current <= end;
+      current.setDate(current.getDate() + 1)
+    ) {
+      const year = current.getFullYear();
+      const month = String(current.getMonth() + 1).padStart(2, "0");
+      const day = String(current.getDate()).padStart(2, "0");
+      const date = `${year}-${month}-${day}`;
+
+      const dayOfWeek = current.getDay();
+
+      if (
+        !excludedDays.includes(dayOfWeek) &&
+        !holidays.has(date)
+      ) {
+        dates.push(date);
+      }
+    }
+
+    const sundays = dates.filter((d) => {
+      const dt = new Date(`${d}T00:00:00`);
+      return dt.getDay() === 0;
+    });
+
+    console.log("🗓️ DATES GENERATED:", {
+      total: dates.length,
+      first_5: dates.slice(0, 5),
+      last_5: dates.slice(-5),
+      sundays_count: sundays.length,
+    });
+
+    return dates;
   }
-
-  const sundays = dates.filter((d) => {
-    const dt = new Date(`${d}T00:00:00`);
-    return dt.getDay() === 0;
-  });
-
-  console.log("🗓️ DATES GENERATED:", {
-    total: dates.length,
-    first_5: dates.slice(0, 5),
-    last_5: dates.slice(-5),
-    sundays_count: sundays.length,
-  });
-
-  return dates;
-}
 
   buildStudentQuery(payload = {}) {
     const where = {};
@@ -683,7 +678,7 @@ consent_letters: () => this.generateConsentLetters(job),
           "department",
           "mobile",
           "email",
-           "signature",
+          "signature",
         ],
         required: false,
       },
@@ -711,7 +706,7 @@ consent_letters: () => this.generateConsentLetters(job),
     return students;
   }
 
-  // ✅ FIXED: 4.5 default, learning_hours safety
+  // ✅ FIXED: 4.5 default, learning_hours safety AND Domain Remarks
   async generateAttendance(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
@@ -757,31 +752,18 @@ consent_letters: () => this.generateConsentLetters(job),
     const rows = [];
 
     for (const student of students) {
-      const existingLogbooks = await Logbook.findAll({
-        where: { student_id: student.id },
-        attributes: ["date", "activity"],
-      });
-
-      const logbookByDate = new Map(
-        existingLogbooks.map((entry) => [
-          String(entry.date).slice(0, 10),
-          entry.activity,
-        ]),
-      );
-
+      // ✅ FIX: Logbook fetch karna band kar diya
+      // Ab sirf domainRemarks.js wali file se remarks aayenge
+      
       const domainName = student.domain?.domain_name || "";
       const domainRemarks = getDomainRemarks(domainName);
 
       for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
         const date = dates[dayIndex];
 
-        const remarksFromLogbook = logbookByDate.get(String(date));
-        const remarksFromDomain =
-          domainRemarks[dayIndex % domainRemarks.length];
-
+        // ✅ Sirf domain remarks use honge
         const remarks =
-          remarksFromLogbook ||
-          remarksFromDomain ||
+          domainRemarks[dayIndex % domainRemarks.length] ||
           payload.daily_activity ||
           payload.remarks ||
           "Completed assigned learning modules and internship activities.";
@@ -1366,7 +1348,7 @@ consent_letters: () => this.generateConsentLetters(job),
     );
   }
 
-   async publishResults(job, options = {}) {
+  async publishResults(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1397,12 +1379,10 @@ consent_letters: () => this.generateConsentLetters(job),
         );
       }
 
-      // ✅ 1. GENERATE RANDOM SCORE (89% - 95%)
       const randomScore = Number(
         (Math.random() * 6 + 89).toFixed(2),
       );
 
-      // ✅ 2. DETERMINE GRADE BASED ON SCORE
       let grade = "A+";
       if (randomScore >= 90) {
         grade = "A+";
@@ -1420,16 +1400,14 @@ consent_letters: () => this.generateConsentLetters(job),
         grade = "F";
       }
 
-      // ✅ 3. DETERMINE STATUS
       const passed = randomScore >= Number(payload.pass_percentage || 40);
 
-      // ✅ 4. CREATE/UPDATE RESULT IN DB WITH RANDOM SCORE
       const [result, created] = await Result.findOrCreate({
         where: { student_id: student.id },
         defaults: {
           assessment_id: assessment.id,
-          score_percentage: randomScore, // ✅ RANDOM SCORE
-          grade: grade,                  // ✅ RANDOM GRADE
+          score_percentage: randomScore,
+          grade: grade,
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1443,8 +1421,8 @@ consent_letters: () => this.generateConsentLetters(job),
       if (!created) {
         await result.update({
           assessment_id: assessment.id,
-          score_percentage: randomScore, // ✅ RANDOM SCORE
-          grade: grade,                  // ✅ RANDOM GRADE
+          score_percentage: randomScore,
+          grade: grade,
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1453,20 +1431,18 @@ consent_letters: () => this.generateConsentLetters(job),
         });
       }
 
-      // ✅ 5. GENERATE PDF WITH SAME RANDOM SCORE
       const marksheetResult =
         await bulkPdfDocumentService.generateAssessmentMarksheet({
           student,
           assessment,
           result,
           generatedAt: publishedAt,
-          percentage: randomScore,       // ✅ RANDOM SCORE
-          grade: grade,                  // ✅ RANDOM GRADE
+          percentage: randomScore,
+          grade: grade,
           resultStatus: result.result_status,
           performance: assessment.overall_performance,
         });
 
-      // ✅ 6. SAVE GENERATED DOCUMENT
       await this.saveGeneratedDocument(
         student.id,
         "assessment_marksheet",
@@ -1746,7 +1722,7 @@ consent_letters: () => this.generateConsentLetters(job),
     return result;
   }
 
-   async generateLogBooks(job, options = {}) {
+  async generateLogBooks(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
@@ -1784,12 +1760,6 @@ consent_letters: () => this.generateConsentLetters(job),
           index,
         );
 
-        /*
-         * ✅ PRIORITY 1: Domain logbook entry (activity + skills)
-         * ✅ PRIORITY 2: Attendance remarks
-         * ✅ PRIORITY 3: Payload daily_activity / skills
-         * ✅ PRIORITY 4: Fallback
-         */
         const activity =
           domainEntry.activity ||
           record.remarks ||
@@ -1901,93 +1871,80 @@ consent_letters: () => this.generateConsentLetters(job),
     return result;
   }
 
-  async generateInternshipReports(job, options = {}) {
+      async generateInternshipReports(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
       ...(options.payload || {}),
     };
 
     const students = await this.getStudents(payload);
-
-    const generatedAt = this.resolveDateTime(
-      payload.generated_at,
-    );
-
     const files = [];
     let processed = 0;
+
+    // ✅ FIX: Static reports folder in assets (survives deployment)
+    const STATIC_REPORTS_DIR = path.resolve("src", "assets", "static-reports");
 
     for (const student of students) {
       await this.assertNotCancelled(job);
 
-      const attendance = await this.getAttendance(
-        student.id,
-        payload,
-      );
+      const domainName = student.domain?.domain_name || "";
+      
+      // ✅ Look for PDF matching domain name
+      let sourcePdfPath = path.join(STATIC_REPORTS_DIR, `${domainName}.pdf`);
+      
+      // ✅ Fallback: fuzzy match if exact name fails
+      if (!fs.existsSync(sourcePdfPath)) {
+        const filesInDir = fs.readdirSync(STATIC_REPORTS_DIR);
+        const matchedFile = filesInDir.find(file => {
+          const fileBase = file.replace(/\.pdf$/i, "").toLowerCase();
+          const domainBase = domainName.toLowerCase();
+          return fileBase === domainBase || 
+                 fileBase.includes(domainBase) || 
+                 domainBase.includes(fileBase);
+        });
+        
+        if (matchedFile) {
+          sourcePdfPath = path.join(STATIC_REPORTS_DIR, matchedFile);
+        }
+      }
 
-      const chapterCount = await ChapterCompletion.count({
-        where: {
-          student_id: student.id,
-          status: "completed",
-        },
-      });
+      if (!fs.existsSync(sourcePdfPath)) {
+        console.warn(`⚠️ Static PDF not found for domain: "${domainName}"`);
+        processed += 1;
+        if (!options.silent) {
+          await this.updateProgress(job, processed, students.length);
+        }
+        continue;
+      }
 
-      const assessment = await Assessment.findOne({
-        where: {
-          student_id: student.id,
-          assessment_type:
-            payload.assessment_type || "final",
-        },
-        order: [["id", "DESC"]],
-      });
+      // ✅ Copy into student's generated folder
+      const studentFolder = this.studentFolder(student);
+      const destinationDir = path.resolve("uploads", "generated", studentFolder);
+      
+      if (!fs.existsSync(destinationDir)) {
+        fs.mkdirSync(destinationDir, { recursive: true });
+      }
 
-      const result = await Result.findOne({
+      const destinationPath = path.join(destinationDir, "internship-report.pdf");
+      fs.copyFileSync(sourcePdfPath, destinationPath);
+
+      const fileUrl = toPublicUrl(destinationPath);
+
+      // ✅ Save DB record
+      const [report, created] = await InternshipReport.findOrCreate({
         where: { student_id: student.id },
+        defaults: {
+          report_url: fileUrl,
+          status: "approved",
+          mentor_remarks: payload.report_remarks || "Report generated through bulk automation",
+        },
       });
-
-      const documentResult =
-        await bulkPdfDocumentService.generateInternshipReport({
-          student,
-          attendance,
-          chapterCount,
-          assessment,
-          result,
-          generatedAt,
-          reportSummary: payload.report_summary || null,
-          organizationName:
-            payload.organization_name ||
-            "Optimark Ventures Private Limited",
-          internshipTopic:
-            student.domain?.domain_name ||
-            student.major_subject ||
-            "Internship Programme",
-          totalHours: Number(
-            payload.total_hours ||
-              student.domain?.duration_hours ||
-              120,
-          ),
-        });
-
-      const fileUrl = documentResult.file_url;
-
-      const [report, created] =
-        await InternshipReport.findOrCreate({
-          where: { student_id: student.id },
-          defaults: {
-            report_url: fileUrl,
-            status: "approved",
-            mentor_remarks:
-              payload.report_remarks ||
-              "Report generated through bulk automation",
-          },
-        });
 
       if (!created) {
         await report.update({
           report_url: fileUrl,
           status: "approved",
-          mentor_remarks:
-            payload.report_remarks ||
-            report.mentor_remarks,
+          mentor_remarks: payload.report_remarks || report.mentor_remarks,
         });
       }
 
@@ -1996,7 +1953,7 @@ consent_letters: () => this.generateConsentLetters(job),
         "internship_report",
         fileUrl,
         job,
-        { generated_at: generatedAt },
+        { generated_at: new Date() },
       );
 
       files.push({
@@ -2007,11 +1964,7 @@ consent_letters: () => this.generateConsentLetters(job),
       processed += 1;
 
       if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+        await this.updateProgress(job, processed, students.length);
       }
     }
 
@@ -2022,18 +1975,12 @@ consent_letters: () => this.generateConsentLetters(job),
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        response,
-      );
+      await this.updateProgress(job, students.length, students.length, response);
     }
 
     return response;
   }
 
-  // ✅ FIXED: domain_name + gender pass karo
   async generateCertificates(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
@@ -2117,7 +2064,6 @@ consent_letters: () => this.generateConsentLetters(job),
           certificateNumber,
         )}`;
 
-        // ✅ domain_name + gender bhejo
         const domainName = student.domain?.domain_name || "";
         const gender = student.gender || "";
 
@@ -2254,128 +2200,128 @@ consent_letters: () => this.generateConsentLetters(job),
   }
 
   async generateDepartmentCertificates(job, options = {}) {
-  const payload = {
-    ...(job.payload || {}),
-    ...(options.payload || {}),
-  };
+    const payload = {
+      ...(job.payload || {}),
+      ...(options.payload || {}),
+    };
 
-  const students = await this.getStudents(payload);
+    const students = await this.getStudents(payload);
 
-  const generatedAt = this.resolveDateTime(payload.generated_at);
+    const generatedAt = this.resolveDateTime(payload.generated_at);
 
-  const files = [];
-  let processed = 0;
+    const files = [];
+    let processed = 0;
 
-  for (const student of students) {
-    await this.assertNotCancelled(job);
+    for (const student of students) {
+      await this.assertNotCancelled(job);
 
-    const documentResult =
-      await bulkPdfDocumentService.generateDepartmentCertificate({
-        student,
-        generatedAt,
-        totalHours: Number(
-          payload.total_hours ||
-            student.domain?.duration_hours ||
-            120,
-        ),
+      const documentResult =
+        await bulkPdfDocumentService.generateDepartmentCertificate({
+          student,
+          generatedAt,
+          totalHours: Number(
+            payload.total_hours ||
+              student.domain?.duration_hours ||
+              120,
+          ),
+        });
+
+      await this.saveGeneratedDocument(
+        student.id,
+        "department_certificate",
+        documentResult.file_url,
+        job,
+        {
+          generated_at: generatedAt,
+        },
+      );
+
+      files.push({
+        student_id: student.id,
+        file_url: documentResult.file_url,
       });
 
-    await this.saveGeneratedDocument(
-      student.id,
-      "department_certificate",
-      documentResult.file_url,
-      job,
-      {
-        generated_at: generatedAt,
-      },
-    );
+      processed += 1;
 
-    files.push({
-      student_id: student.id,
-      file_url: documentResult.file_url,
-    });
+      if (!options.silent) {
+        await this.updateProgress(job, processed, students.length);
+      }
+    }
 
-    processed += 1;
+    const result = {
+      students: students.length,
+      department_certificates: files.length,
+      files,
+    };
 
     if (!options.silent) {
-      await this.updateProgress(job, processed, students.length);
+      await this.updateProgress(job, students.length, students.length, result);
     }
+
+    return result;
   }
 
-  const result = {
-    students: students.length,
-    department_certificates: files.length,
-    files,
-  };
+  async generateConsentLetters(job, options = {}) {
+    const payload = {
+      ...(job.payload || {}),
+      ...(options.payload || {}),
+    };
 
-  if (!options.silent) {
-    await this.updateProgress(job, students.length, students.length, result);
-  }
+    const students = await this.getStudents(payload);
 
-  return result;
-}
+    const generatedAt = this.resolveDateTime(payload.generated_at);
 
-async generateConsentLetters(job, options = {}) {
-  const payload = {
-    ...(job.payload || {}),
-    ...(options.payload || {}),
-  };
+    const files = [];
+    let processed = 0;
 
-  const students = await this.getStudents(payload);
+    for (const student of students) {
+      await this.assertNotCancelled(job);
 
-  const generatedAt = this.resolveDateTime(payload.generated_at);
+      const documentResult =
+        await bulkPdfDocumentService.generateConsentLetter({
+          student,
+          generatedAt,
+          totalHours: Number(
+            payload.total_hours ||
+              student.domain?.duration_hours ||
+              120,
+          ),
+        });
 
-  const files = [];
-  let processed = 0;
+      await this.saveGeneratedDocument(
+        student.id,
+        "consent_letter",
+        documentResult.file_url,
+        job,
+        {
+          generated_at: generatedAt,
+        },
+      );
 
-  for (const student of students) {
-    await this.assertNotCancelled(job);
-
-    const documentResult =
-      await bulkPdfDocumentService.generateConsentLetter({
-        student,
-        generatedAt,
-        totalHours: Number(
-          payload.total_hours ||
-            student.domain?.duration_hours ||
-            120,
-        ),
+      files.push({
+        student_id: student.id,
+        file_url: documentResult.file_url,
       });
 
-    await this.saveGeneratedDocument(
-      student.id,
-      "consent_letter",
-      documentResult.file_url,
-      job,
-      {
-        generated_at: generatedAt,
-      },
-    );
+      processed += 1;
 
-    files.push({
-      student_id: student.id,
-      file_url: documentResult.file_url,
-    });
+      if (!options.silent) {
+        await this.updateProgress(job, processed, students.length);
+      }
+    }
 
-    processed += 1;
+    const result = {
+      students: students.length,
+      consent_letters: files.length,
+      files,
+    };
 
     if (!options.silent) {
-      await this.updateProgress(job, processed, students.length);
+      await this.updateProgress(job, students.length, students.length, result);
     }
+
+    return result;
   }
-
-  const result = {
-    students: students.length,
-    consent_letters: files.length,
-    files,
-  };
-
-  if (!options.silent) {
-    await this.updateProgress(job, students.length, students.length, result);
-  }
-
-  return result;
-}
 
   resolveFilePath(url) {
     if (!url) {
@@ -2552,13 +2498,10 @@ async generateConsentLetters(job, options = {}) {
     const payload = job.payload || {};
 
     const steps = [
-      
       {
-    name: "consent_letters",
-    run: () => this.generateConsentLetters(job, { payload, silent: true }),
-  },
-
-
+        name: "consent_letters",
+        run: () => this.generateConsentLetters(job, { payload, silent: true }),
+      },
       {
         name: "acceptance_letters",
         run: () =>
@@ -2639,10 +2582,10 @@ async generateConsentLetters(job, options = {}) {
             silent: true,
           }),
       },
-       {
-    name: "department_certificates",
-    run: () => this.generateDepartmentCertificates(job, { payload, silent: true }),
-  },
+      {
+        name: "department_certificates",
+        run: () => this.generateDepartmentCertificates(job, { payload, silent: true }),
+      },
       {
         name: "certificates",
         run: () =>
