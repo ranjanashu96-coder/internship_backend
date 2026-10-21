@@ -1583,6 +1583,7 @@ class BulkJobRunner extends EventEmitter {
     });
   }
 
+   // ✅ FIX: Purani gandi entries ko PDF me aane se rokne ke liye filter lagaya
   async generateAttendanceSheets(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
@@ -1590,9 +1591,11 @@ class BulkJobRunner extends EventEmitter {
     };
 
     const students = await this.getStudents(payload);
-
-    const generatedAt = this.resolveDateTime(
-      payload.generated_at,
+    const generatedAt = this.resolveDateTime(payload.generated_at);
+    
+    // Holidays list
+    const holidays = new Set(
+      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
     );
 
     const files = [];
@@ -1601,88 +1604,56 @@ class BulkJobRunner extends EventEmitter {
     for (const student of students) {
       await this.assertNotCancelled(job);
 
-      const attendance = await this.getAttendance(
-        student.id,
-        payload,
-      );
+      const attendance = await this.getAttendance(student.id, payload);
 
-      const completedHours = attendance.reduce(
-        (total, record) =>
-          total + Number(record.learning_hours || 0),
+      // ✅ BULLETPROOF FIX: Database me se Sunday aur Holidays ko hatao
+      const validAttendance = attendance.filter((record) => {
+        const dateStr = String(record.date).slice(0, 10);
+        const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+        // Sunday (0) nahi hona chahiye aur Holiday list me nahi hona chahiye
+        return dayOfWeek !== 0 && !holidays.has(dateStr);
+      });
+
+      const completedHours = validAttendance.reduce(
+        (total, record) => total + Number(record.learning_hours || 0),
         0,
       );
 
       const documentResult =
         await bulkPdfDocumentService.generateAttendanceLog({
           student,
-          attendance,
+          attendance: validAttendance, // ✅ Filtered data pass kiya
           generatedAt,
-          totalRequiredHours: Number(
-            payload.total_hours ||
-              student.domain?.duration_hours ||
-              120,
-          ),
+          totalRequiredHours: Number(payload.total_hours || student.domain?.duration_hours || 120),
           completedHours,
-          supervisorName:
-            student.mentor?.name ||
-            payload.supervisor_name ||
-            "Rahul Kumar",
-          organizationName:
-            payload.organization_name ||
-            "OPTIMARK VENTURES PRIVATE LIMITED",
-          officeAddress:
-            payload.office_address ||
-            "Biscuit Factory Road, Mithila Colony, Patna, Bihar 801503",
-          organizationPhone:
-            payload.organization_phone || "7544090878",
+          supervisorName: student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
+          organizationName: payload.organization_name || "RKNEXORA PRIVATE LIMITED",
+          officeAddress: payload.office_address || "Biscuit Factory Road, Mithila Colony, Patna, Bihar 801503",
+          organizationPhone: payload.organization_phone || "7544090878",
         });
 
-      await this.saveGeneratedDocument(
-        student.id,
-        "attendance_sheet",
-        documentResult.file_url,
-        job,
-        {
+      await this.saveGeneratedDocument(student.id, "attendance_sheet", documentResult.file_url, job, {
           generated_at: generatedAt,
-          records: attendance.length,
+          records: validAttendance.length,
           completed_hours: completedHours,
-        },
-      );
-
-      files.push({
-        student_id: student.id,
-        file_url: documentResult.file_url,
       });
 
+      files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
 
       if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+        await this.updateProgress(job, processed, students.length);
       }
     }
 
-    const result = {
-      students: students.length,
-      attendance_sheets: files.length,
-      files,
-    };
-
+    const result = { students: students.length, attendance_sheets: files.length, files };
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, students.length, students.length, result);
     }
-
     return result;
   }
 
+  // ✅ FIX: Logbook ke liye bhi wahi filter lagaya
   async generateLogBooks(job, options = {}) {
     const payload = {
       ...(job.payload || {}),
@@ -1704,66 +1675,41 @@ class BulkJobRunner extends EventEmitter {
 
       const attendance = await this.getAttendance(student.id, payload);
 
-      const validAttendance = attendance.filter(
-        (record) => !holidays.has(String(record.date).slice(0, 10))
-      );
+      // ✅ BULLETPROOF FIX: Database me se Sunday aur Holidays ko hatao
+      const validAttendance = attendance.filter((record) => {
+        const dateStr = String(record.date).slice(0, 10);
+        const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+        return dayOfWeek !== 0 && !holidays.has(dateStr);
+      });
 
       for (let index = 0; index < validAttendance.length; index += 1) {
         const record = validAttendance[index];
         const domainName = student.domain?.domain_name || "";
         const domainEntry = getDomainLogbookEntry(domainName, index);
 
-        const activity =
-          domainEntry.activity ||
-          record.remarks ||
-          payload.daily_activity ||
-          "Completed assigned learning modules and internship activities.";
-
-        const skills =
-          domainEntry.skills ||
-          payload.skills ||
-          "Technical learning, communication and professional skills";
+        const activity = domainEntry.activity || record.remarks || payload.daily_activity || "Completed assigned learning modules and internship activities.";
+        const skills = domainEntry.skills || payload.skills || "Technical learning, communication and professional skills";
 
         const [entry, created] = await Logbook.findOrCreate({
-          where: {
-            student_id: student.id,
-            date: record.date,
-          },
-          defaults: {
-            activity,
-            skills,
-            hours_worked: record.learning_hours || 0,
-          },
+          where: { student_id: student.id, date: record.date },
+          defaults: { activity, skills, hours_worked: record.learning_hours || 0 },
         });
 
         if (!created) {
-          await entry.update({
-            activity,
-            skills: skills || entry.skills,
-            hours_worked: record.learning_hours || entry.hours_worked || 0,
-          });
+          await entry.update({ activity, skills: skills || entry.skills, hours_worked: record.learning_hours || entry.hours_worked || 0 });
         }
       }
 
       if (holidays.size > 0) {
         await Logbook.destroy({
-          where: {
-            student_id: student.id,
-            date: { [Op.in]: Array.from(holidays) },
-          },
+          where: { student_id: student.id, date: { [Op.in]: Array.from(holidays) } },
         });
       }
 
       const entries = await Logbook.findAll({
         where: {
           student_id: student.id,
-          ...(payload.start_date && payload.end_date
-            ? {
-                date: {
-                  [Op.between]: [payload.start_date, payload.end_date],
-                },
-              }
-            : {}),
+          ...(payload.start_date && payload.end_date ? { date: { [Op.between]: [payload.start_date, payload.end_date] } } : {}),
         },
         order: [["date", "ASC"]],
       });
@@ -1775,24 +1721,12 @@ class BulkJobRunner extends EventEmitter {
         supervisorName: student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
       });
 
-      const fileUrl = documentResult.file_url;
-
-      await this.saveGeneratedDocument(
-        student.id,
-        "logbook",
-        fileUrl,
-        job,
-        {
+      await this.saveGeneratedDocument(student.id, "logbook", documentResult.file_url, job, {
           generated_at: generatedAt,
           entries: entries.length,
-        },
-      );
-
-      files.push({
-        student_id: student.id,
-        file_url: fileUrl,
       });
 
+      files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
 
       if (!options.silent) {
@@ -1800,16 +1734,10 @@ class BulkJobRunner extends EventEmitter {
       }
     }
 
-    const result = {
-      students: students.length,
-      logbooks: files.length,
-      files,
-    };
-
+    const result = { students: students.length, logbooks: files.length, files };
     if (!options.silent) {
       await this.updateProgress(job, students.length, students.length, result);
     }
-
     return result;
   }
 
