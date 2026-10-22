@@ -551,10 +551,7 @@ export const certificateTemplate = ({
             <div style="font-weight: 700; color: #1d4fa3;">Total Hours Completed</div>
             <div><strong>${escapeHtml(`${durationHours} Hours`)}</strong></div>
           </div>
-          <div style="text-align: center;">
-            <div style="font-weight: 700; color: #1d4fa3;">Mode of Internship</div>
-            <div><strong>${escapeHtml(internship?.mode || "Online")}</strong></div>
-          </div>
+          <!-- ❌ MODE OF INTERNSHIP REMOVED FROM HERE -->
           <div style="text-align: center;">
             <div style="font-weight: 700; color: #1d4fa3;">Domain / Area</div>
             <div><strong>${escapeHtml(domain?.domain_name || "-")}</strong></div>
