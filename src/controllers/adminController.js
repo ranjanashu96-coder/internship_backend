@@ -15,6 +15,7 @@ import {
   BulkJob,
   RefreshToken,
    LateFineSetting,
+    GeneratedDocument,
   
 } from "../models/index.js";
 
@@ -1134,36 +1135,43 @@ export const getById = (entity) =>
     }
 
     const options = {};
+    
     if (entity === "students") {
-  options.attributes = {
-    exclude: ["password_hash"],
-  };
+      options.attributes = {
+        exclude: ["password_hash"],
+      };
 
-  options.include = [
-    {
-      model: College,
-      as: "college",
-      attributes: [
-        "id",
-        "name",
-        "code",
-        "university",
-      ],
-      required: false,
-    },
-    {
-      model: Domain,
-      as: "domain",
-      attributes: [
-        "id",
-        "domain_name",
-        "fee",
-        "duration_hours",
-      ],
-      required: false,
-    },
-  ];
-}
+      options.include = [
+        {
+          model: College,
+          as: "college",
+          attributes: [
+            "id",
+            "name",
+            "code",
+            "university",
+          ],
+          required: false,
+        },
+        {
+          model: Domain,
+          as: "domain",
+          attributes: [
+            "id",
+            "domain_name",
+            "fee",
+            "duration_hours",
+          ],
+          required: false,
+        },
+        // ✅ NAYA: Student ke saare generated documents fetch karo
+        {
+          model: GeneratedDocument,
+          as: "generated_documents",
+          required: false,
+        },
+      ];
+    }
 
     if (entity === "colleges") {
       options.include = [
@@ -1185,34 +1193,34 @@ export const getById = (entity) =>
       ];
     }
 
-   if (entity === "mentors") {
-  options.attributes = {
-    exclude: ["password_hash"],
-  };
+    if (entity === "mentors") {
+      options.attributes = {
+        exclude: ["password_hash"],
+      };
 
-  options.include = [
-    {
-      model: Domain,
-      as: "domain",
-      attributes: [
-        "id",
-        "domain_name",
-        "fee",
-        "duration_hours",
-      ],
-    },
-    {
-      model: College,
-      as: "college",
-      attributes: [
-        "id",
-        "name",
-        "code",
-      ],
-      required: false,
-    },
-  ];
-}
+      options.include = [
+        {
+          model: Domain,
+          as: "domain",
+          attributes: [
+            "id",
+            "domain_name",
+            "fee",
+            "duration_hours",
+          ],
+        },
+        {
+          model: College,
+          as: "college",
+          attributes: [
+            "id",
+            "name",
+            "code",
+          ],
+          required: false,
+        },
+      ];
+    }
 
     const row = await Model.findByPk(req.params.id, options);
 
@@ -1221,23 +1229,22 @@ export const getById = (entity) =>
     }
 
     if (entity === "mentors") {
-  const mentorUser = await User.findOne({
-    where: {
-      email: row.email,
-      role: "mentor",
-    },
-    attributes: ["id", "username", "email", "status"],
-  });
+      const mentorUser = await User.findOne({
+        where: {
+          email: row.email,
+          role: "mentor",
+        },
+        attributes: ["id", "username", "email", "status"],
+      });
 
-  if (mentorUser) {
-    row.dataValues.username = mentorUser.username;
-    row.dataValues.user_id = mentorUser.id;
-  } else {
-    row.dataValues.username = null;
-    row.dataValues.user_id = null;
-  }
-}
-
+      if (mentorUser) {
+        row.dataValues.username = mentorUser.username;
+        row.dataValues.user_id = mentorUser.id;
+      } else {
+        row.dataValues.username = null;
+        row.dataValues.user_id = null;
+      }
+    }
 
     ok(res, row);
   });
@@ -3938,6 +3945,86 @@ export const getLateFineSettings = asyncHandler(
           setting?.updated_at || null,
       },
       "Late fine settings fetched successfully",
+    );
+  },
+);
+
+/*
+|--------------------------------------------------------------------------
+| Get All Generated Documents
+|--------------------------------------------------------------------------
+| Admin panel me saare students ke documents dekhne ke liye.
+*/
+export const getAllGeneratedDocuments = asyncHandler(
+  async (req, res) => {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
+    const offset = (page - 1) * limit;
+    
+    const { search, type } = req.query;
+
+    const whereClause = {};
+    if (type) {
+      whereClause.type = type;
+    }
+
+    const studentWhere = {};
+    if (search) {
+      studentWhere[Op.or] = [
+        { name: { [Op.like]: `%${search}%` } },
+        { registration_number: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } },
+      ];
+    }
+
+    const { count, rows } = await GeneratedDocument.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Student,
+          as: "student", // ✅ Apne association ka naam check karein (student ya Student)
+          attributes: [
+            "id", 
+            "name", 
+            "registration_number", 
+            "email",
+            "college_id",
+            "domain_id"
+          ],
+          where: Object.keys(studentWhere).length > 0 ? studentWhere : undefined,
+          required: Object.keys(studentWhere).length > 0,
+          include: [
+            {
+              model: College,
+              as: "college",
+              attributes: ["id", "name", "code"],
+              required: false,
+            },
+            {
+              model: Domain,
+              as: "domain",
+              attributes: ["id", "domain_name"],
+              required: false,
+            }
+          ]
+        },
+      ],
+      order: [["generated_at", "DESC"]],
+      limit,
+      offset,
+      distinct: true, // Count me duplicate na aaye
+    });
+
+    return ok(
+      res,
+      {
+        items: rows,
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit),
+      },
+      "Generated documents fetched successfully",
     );
   },
 );

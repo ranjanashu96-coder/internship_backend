@@ -110,6 +110,7 @@ sendAdminMessage,
   resetStudentPassword,
   getLateFineSettings,
   updateLateFineSettings,
+  getAllGeneratedDocuments
 } from "../controllers/adminController.js";
 
 import {
@@ -721,6 +722,11 @@ router.get(
 router.post(
   "/students/:studentId/quizzes/:quizId/reattempt",
   grantAdminQuizReattempt,
+);
+
+router.get(
+  "/generated-documents",
+  getAllGeneratedDocuments,
 );
 
 export default router;

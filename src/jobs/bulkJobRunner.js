@@ -4,22 +4,16 @@ import path from "path";
 import archiver from "archiver";
 import { Op } from "sequelize";
 import { v4 as uuid } from "uuid";
-import {
-  getStudentEligibility,
-} from "../services/studentEligibilityService.js";
+
+import { getStudentEligibility } from "../services/studentEligibilityService.js";
+import { bulkPdfDocumentService } from "../services/bulkPdfDocumentService.js";
+import { getDomainRemarks } from "../config/domainRemarks.js";
+import { getDomainLogbookEntry } from "../config/domainLogbookData.js";
+import { ensureDir } from "../utils/files.js";
+
 import {
   College,
   Mentor,
-} from "../models/index.js";
-
-import {
-  bulkPdfDocumentService,
-} from "../services/bulkPdfDocumentService.js";
-
-import { getDomainRemarks } from "../config/domainRemarks.js";
-import { getDomainLogbookEntry } from "../config/domainLogbookData.js";
-
-import {
   BulkJob,
   Student,
   Attendance,
@@ -40,7 +34,9 @@ import {
   Domain,
 } from "../models/index.js";
 
-import { ensureDir } from "../utils/files.js";
+/* ============================================================================
+ * Constants
+ * ========================================================================== */
 
 export const BULK_JOB_TYPES = Object.freeze([
   "attendance",
@@ -61,20 +57,27 @@ export const BULK_JOB_TYPES = Object.freeze([
 ]);
 
 const ZIP_ROOT = path.resolve("uploads", "zips");
+const STATIC_REPORTS_DIR = path.resolve("src", "assets", "static-reports");
+
+// Safety limits
+const STUDENT_FETCH_CHUNK = 500;        // students per DB query
+const ATTENDANCE_INSERT_BATCH = 500;    // rows per bulkCreate
+const CHAPTER_FIND_OR_CREATE_BATCH = 200;
+const PROGRESS_UPDATE_EVERY = 25;       // update job row after N items
+const CANCEL_CHECK_EVERY = 25;          // check cancel after N items
+const JOB_TIMEOUT_MS = 1000 * 60 * 60;  // 1 hour hard limit per job
+const RESULT_JSON_MAX_ITEMS = 500;      // cap arrays in result JSON
+const STUCK_JOB_RESET_MS = 1000 * 60 * 30; // 30 min — resume only if stale
+
+/* ============================================================================
+ * Helpers
+ * ========================================================================== */
 
 const normalizeIds = (values) => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-
+  if (!Array.isArray(values)) return [];
   return [
     ...new Set(
-      values
-        .map(Number)
-        .filter(
-          (value) =>
-            Number.isInteger(value) && value > 0,
-        ),
+      values.map(Number).filter((v) => Number.isInteger(v) && v > 0)
     ),
   ];
 };
@@ -89,41 +92,29 @@ const toPublicUrl = (absolutePath) => {
   const relative = path
     .relative(path.resolve("."), absolutePath)
     .replaceAll("\\", "/");
-
   return `/${relative}`;
 };
 
 const calculateHours = (loginTime, logoutTime) => {
-  if (!loginTime || !logoutTime) {
-    return 0;
-  }
-
-  const [loginHour, loginMinute] = String(loginTime)
-    .split(":")
-    .map(Number);
-
-  const [logoutHour, logoutMinute] = String(logoutTime)
-    .split(":")
-    .map(Number);
-
-  if (
-    [
-      loginHour,
-      loginMinute,
-      logoutHour,
-      logoutMinute,
-    ].some(Number.isNaN)
-  ) {
-    return 0;
-  }
-
-  const login = loginHour * 60 + loginMinute;
-  const logout = logoutHour * 60 + logoutMinute;
-
-  return Number(
-    (Math.max(0, logout - login) / 60).toFixed(2),
-  );
+  if (!loginTime || !logoutTime) return 0;
+  const [lh, lm] = String(loginTime).split(":").map(Number);
+  const [oh, om] = String(logoutTime).split(":").map(Number);
+  if ([lh, lm, oh, om].some(Number.isNaN)) return 0;
+  return Number((Math.max(0, oh * 60 + om - (lh * 60 + lm)) / 60).toFixed(2));
 };
+
+const chunk = (arr, size) => {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
+const capArray = (arr, max = RESULT_JSON_MAX_ITEMS) =>
+  Array.isArray(arr) && arr.length > max
+    ? arr.slice(0, max).concat([{ truncated: true, total: arr.length }])
+    : arr;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class BulkJobCancelledError extends Error {
   constructor(message = "Bulk job cancelled") {
@@ -132,19 +123,28 @@ class BulkJobCancelledError extends Error {
   }
 }
 
+/* ============================================================================
+ * Runner
+ * ========================================================================== */
+
 class BulkJobRunner extends EventEmitter {
   constructor() {
     super();
 
     this.running = false;
     this.queue = [];
+    this.activeJobId = null;
+    this.enqueuedSet = new Set(); // dedupe queue entries
+    this.shuttingDown = false;
 
     this.on("enqueue", () => {
       this.drain().catch((error) => {
-        console.error("Bulk queue error:", error);
+        console.error("[bulkJobRunner] Queue drain error:", error);
       });
     });
   }
+
+  /* -------------------- Job creation -------------------- */
 
   async create(type, payload, createdBy) {
     if (!BULK_JOB_TYPES.includes(type)) {
@@ -169,21 +169,40 @@ class BulkJobRunner extends EventEmitter {
       error_message: null,
     });
 
-    this.queue.push(job.id);
-    this.emit("enqueue");
-
+    this._enqueue(job.id);
     return job;
   }
 
+  _enqueue(jobId) {
+    const id = Number(jobId);
+    if (this.enqueuedSet.has(id)) return;
+    this.enqueuedSet.add(id);
+    this.queue.push(id);
+    this.emit("enqueue");
+  }
+
+  /* -------------------- Resume on startup -------------------- */
+
   async resumePendingJobs() {
+    /*
+     * IMPORTANT: Only resume jobs that were "queued" OR "running" but
+     * whose last update was STUCK_JOB_RESET_MS ago. This prevents
+     * crash-restart loops where a job that keeps failing is retried
+     * infinitely at every restart.
+     */
+    const cutoff = new Date(Date.now() - STUCK_JOB_RESET_MS);
+
     const jobs = await BulkJob.findAll({
       where: {
-        status: {
-          [Op.in]: ["queued", "running"],
-        },
+        status: { [Op.in]: ["queued", "running"] },
         cancel_requested: false,
+        [Op.or]: [
+          { started_at: null },
+          { started_at: { [Op.lt]: cutoff } },
+        ],
       },
       order: [["id", "ASC"]],
+      limit: 50,
     });
 
     for (const job of jobs) {
@@ -192,70 +211,69 @@ class BulkJobRunner extends EventEmitter {
         current_step: "resuming",
         error_message: null,
         finished_at: null,
+        started_at: null,
       });
-
-      if (!this.queue.includes(job.id)) {
-        this.queue.push(job.id);
-      }
-    }
-
-    if (jobs.length > 0) {
-      this.emit("enqueue");
+      this._enqueue(job.id);
     }
 
     return jobs.length;
   }
+
+  /* -------------------- Preview -------------------- */
 
   async preview(type, payload = {}) {
     if (!BULK_JOB_TYPES.includes(type)) {
       throw new Error(`Invalid bulk job type: ${type}`);
     }
 
-    const students = await this.getStudents(payload);
+    const total = await this.countStudents(payload);
 
     let workingDays = null;
-    let estimatedRecords = students.length;
+    let estimatedRecords = total;
 
     if (
       ["attendance", "full_internship_process"].includes(type) &&
       payload.start_date &&
       payload.end_date
     ) {
-      const dates = this.dateRange(
-        payload.start_date,
-        payload.end_date,
-        payload,
-      );
-
+      const dates = this.dateRange(payload.start_date, payload.end_date, payload);
       workingDays = dates.length;
-      estimatedRecords = students.length * dates.length;
+      estimatedRecords = total * dates.length;
     }
+
+    // Sample 10 students only
+    const sampleStudents = await Student.findAll({
+      ...this.buildStudentQuery(payload),
+      limit: 10,
+    });
 
     return {
       type,
-      matched_students: students.length,
+      matched_students: total,
       working_days: workingDays,
       estimated_records: estimatedRecords,
-      sample: students.slice(0, 10).map((student) => ({
-        id: student.id,
-        registration_number: student.registration_number,
-        student_id: student.student_id || null,
-        name: student.name,
-        college_id: student.college_id,
-        domain_id: student.domain_id,
-        batch_id: student.batch_id,
-        mentor_id: student.mentor_id,
-        internship_status: student.internship_status,
-        payment_status: student.payment_status,
-        college: student.college
-          ? { id: student.college.id, name: student.college.name }
+      sample: sampleStudents.map((s) => ({
+        id: s.id,
+        registration_number: s.registration_number,
+        student_id: s.student_id || null,
+        name: s.name,
+        college_id: s.college_id,
+        domain_id: s.domain_id,
+        batch_id: s.batch_id,
+        mentor_id: s.mentor_id,
+        internship_status: s.internship_status,
+        payment_status: s.payment_status,
+        college: s.college
+          ? { id: s.college.id, name: s.college.name }
           : null,
-        domain: student.domain
-          ? { id: student.domain.id, name: student.domain.domain_name }
+        domain: s.domain
+          ? { id: s.domain.id, name: s.domain.domain_name }
           : null,
       })),
     };
   }
+
+  /* -------------------- Step / cancel -------------------- */
 
   async setCurrentStep(job, step) {
     await job.update({ current_step: step });
@@ -263,29 +281,22 @@ class BulkJobRunner extends EventEmitter {
 
   async assertNotCancelled(job) {
     await job.reload();
-
     if (job.cancel_requested || job.status === "cancelled") {
       throw new BulkJobCancelledError();
     }
   }
 
   async cancel(jobUuid) {
-    const job = await BulkJob.findOne({
-      where: { job_uuid: jobUuid },
-    });
-
-    if (!job) {
-      throw new Error("Bulk job not found");
-    }
+    const job = await BulkJob.findOne({ where: { job_uuid: jobUuid } });
+    if (!job) throw new Error("Bulk job not found");
 
     if (["completed", "failed", "cancelled"].includes(job.status)) {
       throw new Error(`Cannot cancel ${job.status} job`);
     }
 
     if (job.status === "queued") {
-      this.queue = this.queue.filter(
-        (jobId) => Number(jobId) !== Number(job.id),
-      );
+      this.queue = this.queue.filter((id) => Number(id) !== Number(job.id));
+      this.enqueuedSet.delete(Number(job.id));
 
       await job.update({
         status: "cancelled",
@@ -293,7 +304,6 @@ class BulkJobRunner extends EventEmitter {
         cancel_requested: true,
         finished_at: new Date(),
       });
-
       return job;
     }
 
@@ -301,7 +311,6 @@ class BulkJobRunner extends EventEmitter {
       cancel_requested: true,
       current_step: "cancellation_requested",
     });
-
     return job;
   }
 
@@ -323,48 +332,58 @@ class BulkJobRunner extends EventEmitter {
       zip_documents: "Creating ZIP File",
       full_internship_process: "Running Full Internship Process",
     };
-
     return labels[type] || type;
   }
 
-  async drain() {
-    if (this.running) {
-      return;
-    }
+  /* -------------------- Queue drain -------------------- */
 
+  async drain() {
+    if (this.running || this.shuttingDown) return;
     this.running = true;
 
     try {
       while (this.queue.length > 0) {
+        if (this.shuttingDown) break;
         const jobId = this.queue.shift();
-        await this.execute(jobId);
+        this.enqueuedSet.delete(Number(jobId));
+        this.activeJobId = jobId;
+        try {
+          await this.execute(jobId);
+        } catch (err) {
+          // Never let one job kill the drain loop
+          console.error(`[bulkJobRunner] Job ${jobId} crashed drain:`, err);
+        }
+        this.activeJobId = null;
       }
     } finally {
       this.running = false;
     }
   }
 
-  async updateProgress(job, processed, total, result, metrics = {}) {
-    await this.assertNotCancelled(job);
+  async stop() {
+    this.shuttingDown = true;
+    const start = Date.now();
+    while (this.running && Date.now() - start < 30000) {
+      await sleep(300);
+    }
+  }
 
+  /* -------------------- Progress -------------------- */
+
+  async updateProgress(job, processed, total, result, metrics = {}) {
     const progress =
       total > 0
-        ? Math.min(
-            100,
-            Number(((processed / total) * 100).toFixed(2)),
-          )
+        ? Math.min(100, Number(((processed / total) * 100).toFixed(2)))
         : 100;
 
     const updateData = { processed, total, progress };
 
     if (result !== undefined) {
-      updateData.result = result;
+      updateData.result = this._sanitizeResult(result);
     }
-
     if (metrics.success_count !== undefined) {
       updateData.success_count = metrics.success_count;
     }
-
     if (metrics.failed_count !== undefined) {
       updateData.failed_count = metrics.failed_count;
     }
@@ -372,16 +391,30 @@ class BulkJobRunner extends EventEmitter {
     await job.update(updateData);
   }
 
+  _sanitizeResult(result) {
+    if (!result || typeof result !== "object") return result;
+    const sanitized = {};
+    for (const [key, value] of Object.entries(result)) {
+      sanitized[key] = Array.isArray(value) ? capArray(value) : value;
+    }
+    return sanitized;
+  }
+
+  /* -------------------- Execute -------------------- */
+
   async execute(jobId) {
     const job = await BulkJob.findByPk(jobId);
+    if (!job) return;
+    if (job.status === "cancelled" || job.cancel_requested) return;
 
-    if (!job) {
-      return;
-    }
-
-    if (job.status === "cancelled" || job.cancel_requested) {
-      return;
-    }
+    // Hard timeout protection
+    let timeoutHandle = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Job ${job.job_uuid} exceeded ${JOB_TIMEOUT_MS}ms`)),
+        JOB_TIMEOUT_MS
+      );
+    });
 
     try {
       await job.update({
@@ -400,8 +433,7 @@ class BulkJobRunner extends EventEmitter {
 
       const handlers = {
         attendance: () => this.generateAttendance(job),
-        quiz_attempts_and_submissions: () =>
-          this.generateQuizAttemptsAndSubmissions(job),
+        quiz_attempts_and_submissions: () => this.generateQuizAttemptsAndSubmissions(job),
         complete_learning: () => this.completeLearning(job),
         complete_internship: () => this.completeInternship(job),
         assessment: () => this.generateAssessment(job),
@@ -418,14 +450,11 @@ class BulkJobRunner extends EventEmitter {
       };
 
       const handler = handlers[job.type];
-
-      if (!handler) {
-        throw new Error(`Handler not found for ${job.type}`);
-      }
+      if (!handler) throw new Error(`Handler not found for ${job.type}`);
 
       await this.assertNotCancelled(job);
 
-      const result = await handler();
+      const result = await Promise.race([handler(), timeoutPromise]);
 
       await this.assertNotCancelled(job);
 
@@ -434,7 +463,7 @@ class BulkJobRunner extends EventEmitter {
         current_step: "completed",
         progress: 100,
         finished_at: new Date(),
-        result: result || job.result,
+        result: this._sanitizeResult(result || job.result),
         success_count:
           job.type === "full_internship_process"
             ? Number(job.success_count || 0)
@@ -449,109 +478,89 @@ class BulkJobRunner extends EventEmitter {
           cancel_requested: true,
           finished_at: new Date(),
         });
-
         return;
       }
 
-      console.error(`Bulk job ${job.job_uuid} failed:`, error);
+      console.error(`[bulkJobRunner] Job ${job.job_uuid} failed:`, error);
 
-      await job.update({
-        status: "failed",
-        current_step: "failed",
-        failed_count: Math.max(Number(job.failed_count || 0), 1),
-        error_message: error?.message || "Bulk job failed",
-        finished_at: new Date(),
-      });
+      try {
+        await job.update({
+          status: "failed",
+          current_step: "failed",
+          failed_count: Math.max(Number(job.failed_count || 0), 1),
+          error_message: String(error?.message || "Bulk job failed").slice(0, 2000),
+          finished_at: new Date(),
+        });
+      } catch (updateErr) {
+        console.error("[bulkJobRunner] Failed to mark job as failed:", updateErr);
+      }
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 
+  /* -------------------- Dates -------------------- */
+
   parseDate(value, fieldName) {
-    if (!value) {
-      throw new Error(`${fieldName} is required`);
-    }
-
+    if (!value) throw new Error(`${fieldName} is required`);
     const date = new Date(`${value}T00:00:00`);
-
-    if (Number.isNaN(date.getTime())) {
-      throw new Error(`${fieldName} is invalid`);
-    }
-
+    if (Number.isNaN(date.getTime())) throw new Error(`${fieldName} is invalid`);
     return date;
   }
 
   resolveDateTime(value) {
     const date = value ? new Date(value) : new Date();
-
-    if (Number.isNaN(date.getTime())) {
-      throw new Error("Invalid date and time");
-    }
-
+    if (Number.isNaN(date.getTime())) throw new Error("Invalid date and time");
     return date;
   }
 
-  // ✅ FIXED: Timezone-safe date range
   dateRange(startDate, endDate, payload = {}) {
     if (!startDate || !endDate) {
       throw new Error("start_date and end_date are required");
     }
 
-    const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
-    const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
-
-    if (!startYear || !startMonth || !startDay || !endYear || !endMonth || !endDay) {
+    const [sy, sm, sd] = startDate.split("-").map(Number);
+    const [ey, em, ed] = endDate.split("-").map(Number);
+    if (!sy || !sm || !sd || !ey || !em || !ed) {
       throw new Error("Invalid date format. Use YYYY-MM-DD");
     }
 
-    let current = new Date(Date.UTC(startYear, startMonth - 1, startDay));
-    const end = new Date(Date.UTC(endYear, endMonth - 1, endDay));
-
-    if (current > end) {
-      throw new Error("start_date cannot be after end_date");
-    }
+    let current = new Date(Date.UTC(sy, sm - 1, sd));
+    const end = new Date(Date.UTC(ey, em - 1, ed));
+    if (current > end) throw new Error("start_date cannot be after end_date");
 
     const excludedDays = [0]; // Sunday
-    
     const holidays = new Set(
-      Array.isArray(payload.holidays) 
-        ? payload.holidays.map(h => String(h).trim()) 
+      Array.isArray(payload.holidays)
+        ? payload.holidays.map((h) => String(h).trim())
         : []
     );
 
     const dates = [];
-
     while (current <= end) {
-      const dateStr = current.toISOString().slice(0, 10); 
-      const dayOfWeek = current.getUTCDay(); // 0 = Sunday
-
+      const dateStr = current.toISOString().slice(0, 10);
+      const dayOfWeek = current.getUTCDay();
       if (!excludedDays.includes(dayOfWeek) && !holidays.has(dateStr)) {
         dates.push(dateStr);
       }
-
       current.setUTCDate(current.getUTCDate() + 1);
     }
-
     return dates;
   }
+
+  /* -------------------- Student query -------------------- */
 
   buildStudentQuery(payload = {}) {
     const where = {};
 
     const studentIds = normalizeIds(payload.student_ids);
-
     if (studentIds.length > 0) {
       where.id = { [Op.in]: studentIds };
     }
 
-    const directFilters = [
-      "college_id",
-      "domain_id",
-      "session",
-      "semester",
-      "batch_id",
-      "mentor_id",
-    ];
-
-    for (const field of directFilters) {
+    for (const field of [
+      "college_id", "domain_id", "session", "semester", "batch_id", "mentor_id",
+    ]) {
       if (
         payload[field] !== undefined &&
         payload[field] !== null &&
@@ -565,38 +574,15 @@ class BulkJobRunner extends EventEmitter {
       where.internship_status = payload.internship_status;
     }
 
-    const studentFromDate = String(
-      payload.student_from_date || "",
-    ).trim();
-
-    const studentToDate = String(
-      payload.student_to_date || "",
-    ).trim();
-
-    if (
-      studentFromDate &&
-      studentToDate &&
-      studentFromDate > studentToDate
-    ) {
-      throw new Error(
-        "Student from date cannot be after student to date",
-      );
+    const sFrom = String(payload.student_from_date || "").trim();
+    const sTo = String(payload.student_to_date || "").trim();
+    if (sFrom && sTo && sFrom > sTo) {
+      throw new Error("Student from date cannot be after student to date");
     }
-
-    if (studentFromDate || studentToDate) {
+    if (sFrom || sTo) {
       where.registration_date = {};
-
-      if (studentFromDate) {
-        where.registration_date[Op.gte] = new Date(
-          `${studentFromDate}T00:00:00`,
-        );
-      }
-
-      if (studentToDate) {
-        where.registration_date[Op.lte] = new Date(
-          `${studentToDate}T23:59:59`,
-        );
-      }
+      if (sFrom) where.registration_date[Op.gte] = new Date(`${sFrom}T00:00:00`);
+      if (sTo) where.registration_date[Op.lte] = new Date(`${sTo}T23:59:59`);
     }
 
     const include = [
@@ -604,48 +590,25 @@ class BulkJobRunner extends EventEmitter {
         model: College,
         as: "college",
         attributes: [
-          "id",
-          "name",
-          "code",
-          "university",
-          "principal_name",
-          "coordinator_name",
-          "email",
-          "mobile",
-          "address",
-          "state",
-          "district",
-          "pincode",
-          "logo",
+          "id", "name", "code", "university", "principal_name",
+          "coordinator_name", "email", "mobile", "address",
+          "state", "district", "pincode", "logo",
         ],
         required: false,
       },
       {
         model: Domain,
         as: "domain",
-        attributes: [
-          "id",
-          "sector_id",
-          "domain_name",
-          "duration_hours",
-        ],
-        where: payload.sector_id
-          ? { sector_id: payload.sector_id }
-          : undefined,
+        attributes: ["id", "sector_id", "domain_name", "duration_hours"],
+        where: payload.sector_id ? { sector_id: payload.sector_id } : undefined,
         required: Boolean(payload.sector_id),
       },
       {
         model: Mentor,
         as: "mentor",
         attributes: [
-          "id",
-          "name",
-          "employee_id",
-          "designation",
-          "department",
-          "mobile",
-          "email",
-          "signature",
+          "id", "name", "employee_id", "designation",
+          "department", "mobile", "email", "signature",
         ],
         required: false,
       },
@@ -659,69 +622,124 @@ class BulkJobRunner extends EventEmitter {
     };
   }
 
-  async getStudents(payload = {}) {
-    const students = await Student.findAll(
-      this.buildStudentQuery(payload),
-    );
+  async countStudents(payload = {}) {
+    const query = this.buildStudentQuery(payload);
+    return Student.count({
+      where: query.where,
+      include: query.include,
+      distinct: true,
+    });
+  }
 
-    if (students.length === 0) {
-      throw new Error(
-        "No students matched the selected filters",
-      );
+  /**
+   * ✅ PRODUCTION FIX: Stream students in chunks via id cursor.
+   * Never loads all students in memory.
+   */
+  async *iterateStudents(payload = {}) {
+    const baseQuery = this.buildStudentQuery(payload);
+    let lastId = 0;
+    let fetched = 0;
+
+    while (true) {
+      const where = { ...baseQuery.where };
+      if (lastId > 0) {
+        where.id = {
+          ...(where.id || {}),
+          [Op.gt]: lastId,
+        };
+      }
+
+      const batch = await Student.findAll({
+        ...baseQuery,
+        where,
+        limit: STUDENT_FETCH_CHUNK,
+      });
+
+      if (batch.length === 0) break;
+
+      for (const student of batch) {
+        yield student;
+        fetched += 1;
+      }
+
+      lastId = batch[batch.length - 1].id;
+      if (batch.length < STUDENT_FETCH_CHUNK) break;
     }
 
+    if (fetched === 0) {
+      throw new Error("No students matched the selected filters");
+    }
+  }
+
+  /**
+   * Legacy: getStudents — kept for backward compat.
+   * Prefer iterateStudents() for large datasets.
+   * WARNING: This loads all matched students in memory.
+   */
+  async getStudents(payload = {}) {
+    const students = await Student.findAll(this.buildStudentQuery(payload));
+    if (students.length === 0) {
+      throw new Error("No students matched the selected filters");
+    }
     return students;
   }
 
+  /* ==========================================================================
+   * HANDLERS
+   * ======================================================================== */
+
+  /* -------------------- Attendance -------------------- */
+
   async generateAttendance(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
 
     if (!payload.start_date || !payload.end_date) {
       throw new Error("start_date and end_date are required");
     }
 
-    const students = await this.getStudents(payload);
-
-    const dates = this.dateRange(
-      payload.start_date,
-      payload.end_date,
-      payload,
-    );
-
+    const dates = this.dateRange(payload.start_date, payload.end_date, payload);
     const loginTime = payload.login_time || "09:00:00";
     const logoutTime = payload.logout_time || "13:30:00";
 
     let learningHours;
-    if (payload.learning_hours !== undefined && payload.learning_hours !== null && payload.learning_hours !== "") {
+    if (
+      payload.learning_hours !== undefined &&
+      payload.learning_hours !== null &&
+      payload.learning_hours !== ""
+    ) {
       learningHours = Number(payload.learning_hours);
     } else {
       learningHours = calculateHours(loginTime, logoutTime);
     }
-
     if (!Number.isFinite(learningHours) || learningHours <= 0) {
       learningHours = 4.5;
     }
 
     const holidays = new Set(
-      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
+      Array.isArray(payload.holidays)
+        ? payload.holidays.map((h) => String(h).trim())
+        : []
     );
 
+    let totalStudents = 0;
+    let totalRows = 0;
+    let processed = 0;
+
+    // Collect student IDs first for holiday cleanup
+    const studentIds = [];
     const rows = [];
 
-    for (const student of students) {
+    for await (const student of this.iterateStudents(payload)) {
+      totalStudents += 1;
+      studentIds.push(student.id);
+
       const domainName = student.domain?.domain_name || "";
       const domainRemarks = getDomainRemarks(domainName);
 
       for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
         const date = dates[dayIndex];
         const dateStr = String(date).slice(0, 10);
-
-        if (holidays.has(dateStr)) {
-          continue;
-        }
+        if (holidays.has(dateStr)) continue;
 
         const remarks =
           domainRemarks[dayIndex % domainRemarks.length] ||
@@ -741,159 +759,157 @@ class BulkJobRunner extends EventEmitter {
       }
     }
 
-    if (holidays.size > 0) {
-      const studentIds = students.map((s) => s.id);
-      await Attendance.destroy({
-        where: {
-          student_id: { [Op.in]: studentIds },
-          date: { [Op.in]: Array.from(holidays) },
-        },
-      });
+    totalRows = rows.length;
+
+    if (holidays.size > 0 && studentIds.length > 0) {
+      for (const idChunk of chunk(studentIds, STUDENT_FETCH_CHUNK)) {
+        await Attendance.destroy({
+          where: {
+            student_id: { [Op.in]: idChunk },
+            date: { [Op.in]: Array.from(holidays) },
+          },
+        });
+      }
     }
 
-    const batchSize = 1000;
-    let processed = 0;
-
-    for (let index = 0; index < rows.length; index += batchSize) {
+    for (const batch of chunk(rows, ATTENDANCE_INSERT_BATCH)) {
       await this.assertNotCancelled(job);
-      const batch = rows.slice(index, index + batchSize);
-
       await Attendance.bulkCreate(batch, {
         updateOnDuplicate: [
-          "login_time",
-          "logout_time",
-          "learning_hours",
-          "status",
-          "remarks",
-          "updated_at",
+          "login_time", "logout_time", "learning_hours",
+          "status", "remarks", "updated_at",
         ],
       });
-
       processed += batch.length;
-
       if (!options.silent) {
-        await this.updateProgress(job, processed, rows.length);
+        await this.updateProgress(job, processed, totalRows);
       }
     }
 
     const result = {
-      students: students.length,
+      students: totalStudents,
       working_days: dates.length,
-      attendance_records: rows.length,
+      attendance_records: totalRows,
       start_date: payload.start_date,
       end_date: payload.end_date,
     };
 
     if (!options.silent) {
-      await this.updateProgress(job, rows.length, rows.length, result);
+      await this.updateProgress(job, totalRows, totalRows, result);
     }
-
     return result;
   }
 
+  /* -------------------- Learning -------------------- */
+
   async getStudentChapters(student, payload) {
     const moduleWhere = { domain_id: student.domain_id };
-
     const moduleIds = normalizeIds(payload.module_ids);
-
-    if (moduleIds.length > 0) {
-      moduleWhere.id = { [Op.in]: moduleIds };
-    }
+    if (moduleIds.length > 0) moduleWhere.id = { [Op.in]: moduleIds };
 
     const chapterWhere = {};
-
     const chapterIds = normalizeIds(payload.chapter_ids);
-
-    if (chapterIds.length > 0) {
-      chapterWhere.id = { [Op.in]: chapterIds };
-    }
+    if (chapterIds.length > 0) chapterWhere.id = { [Op.in]: chapterIds };
 
     return Chapter.findAll({
       where: chapterWhere,
       attributes: ["id"],
-      include: [
-        {
-          model: Module,
-          attributes: [],
-          required: true,
-          where: moduleWhere,
-        },
-      ],
-      order: [
-        ["module_id", "ASC"],
-        ["chapter_number", "ASC"],
-      ],
+      include: [{
+        model: Module,
+        attributes: [],
+        required: true,
+        where: moduleWhere,
+      }],
+      order: [["module_id", "ASC"], ["chapter_number", "ASC"]],
     });
   }
 
   async completeLearning(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const completedAt = this.resolveDateTime(
-      payload.completed_at ||
-        payload.learning_completed_at ||
-        payload.end_date,
+      payload.completed_at || payload.learning_completed_at || payload.end_date
     );
 
+    // Phase 1: Fetch chapters per student (chunked)
     let total = 0;
-    const chapterMap = new Map();
+    const studentChapters = []; // [{id, chapters: [{id}]}]
+    let processedStudents = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      processedStudents += 1;
+      if (processedStudents % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       if (!student.domain_id) {
-        chapterMap.set(student.id, []);
+        studentChapters.push({ id: student.id, chapters: [] });
         continue;
       }
 
-      const chapters = await this.getStudentChapters(
-        student,
-        payload,
-      );
-
-      chapterMap.set(student.id, chapters);
+      const chapters = await this.getStudentChapters(student, payload);
+      studentChapters.push({ id: student.id, chapters });
       total += chapters.length;
     }
 
+    // Phase 2: Insert completions in bulk batches
     let processed = 0;
+    let flatRows = [];
+    for (const { id, chapters } of studentChapters) {
+      for (const c of chapters) {
+        flatRows.push({ student_id: id, chapter_id: c.id });
+      }
+    }
 
-    for (const student of students) {
+    for (const batch of chunk(flatRows, CHAPTER_FIND_OR_CREATE_BATCH)) {
       await this.assertNotCancelled(job);
 
-      const chapters = chapterMap.get(student.id) || [];
+      // Bulk lookup existing
+      const existing = await ChapterCompletion.findAll({
+        where: {
+          [Op.or]: batch.map((r) => ({
+            student_id: r.student_id,
+            chapter_id: r.chapter_id,
+          })),
+        },
+        attributes: ["id", "student_id", "chapter_id"],
+      });
+      const existingKeys = new Set(
+        existing.map((e) => `${e.student_id}:${e.chapter_id}`)
+      );
 
-      for (const chapter of chapters) {
-        const [completion, created] =
-          await ChapterCompletion.findOrCreate({
-            where: {
-              student_id: student.id,
-              chapter_id: chapter.id,
-            },
-            defaults: {
-              status: "completed",
-              completed_at: completedAt,
-            },
-          });
+      const toCreate = batch.filter(
+        (r) => !existingKeys.has(`${r.student_id}:${r.chapter_id}`)
+      );
 
-        if (!created) {
-          await completion.update({
+      if (toCreate.length) {
+        await ChapterCompletion.bulkCreate(
+          toCreate.map((r) => ({
+            student_id: r.student_id,
+            chapter_id: r.chapter_id,
             status: "completed",
             completed_at: completedAt,
-          });
-        }
-
-        processed += 1;
-
-        if (!options.silent && processed % 100 === 0) {
-          await this.updateProgress(job, processed, total);
-        }
+          }))
+        );
       }
 
+      if (existing.length) {
+        await ChapterCompletion.update(
+          { status: "completed", completed_at: completedAt },
+          { where: { id: { [Op.in]: existing.map((e) => e.id) } } }
+        );
+      }
+
+      processed += batch.length;
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, total);
+      }
+    }
+
+    // Phase 3: Update students' academics in bulk
+    for (const { id, chapters } of studentChapters) {
+      await this.assertNotCancelled(job);
+      const student = await Student.findByPk(id, { attributes: ["id", "academics_json"] });
+      if (!student) continue;
       const academics = {
         ...(student.academics_json || {}),
         learning_completion: {
@@ -902,15 +918,11 @@ class BulkJobRunner extends EventEmitter {
           chapter_count: chapters.length,
         },
       };
-
-      await student.update({
-        total_progress: 100,
-        academics_json: academics,
-      });
+      await student.update({ total_progress: 100, academics_json: academics });
     }
 
     const result = {
-      students: students.length,
+      students: studentChapters.length,
       chapter_completions: total,
       completed_at: completedAt.toISOString(),
     };
@@ -918,123 +930,129 @@ class BulkJobRunner extends EventEmitter {
     if (!options.silent) {
       await this.updateProgress(job, total, total, result);
     }
-
     return result;
   }
 
+  /* -------------------- Quiz + Assignment -------------------- */
+
   async generateQuizAttemptsAndSubmissions(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
-    const completedAt = this.resolveDateTime(
-      payload.completed_at || payload.end_date,
-    );
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
+    const completedAt = this.resolveDateTime(payload.completed_at || payload.end_date);
 
     let totalQuizzes = 0;
     let totalAssignments = 0;
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
-
-      if (!student.domain_id) {
-        continue;
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
       }
 
-      const chapters = await this.getStudentChapters(
-        student,
-        payload,
-      );
+      if (!student.domain_id) continue;
+
+      const chapters = await this.getStudentChapters(student, payload);
       const chapterIds = chapters.map((c) => Number(c.id));
+      if (chapterIds.length === 0) continue;
 
-      if (chapterIds.length === 0) {
-        continue;
-      }
-
+      // ---- Quizzes: batch lookup then bulk create ----
       const quizzes = await Quiz.findAll({
-        where: {
-          chapter_id: { [Op.in]: chapterIds },
-          status: "active",
-        },
+        where: { chapter_id: { [Op.in]: chapterIds }, status: "active" },
         attributes: ["id"],
       });
-
       totalQuizzes += quizzes.length;
 
-      for (const quiz of quizzes) {
-        await this.assertNotCancelled(job);
-
-        const existingAttempt = await QuizAttempt.findOne({
+      if (quizzes.length) {
+        const existing = await QuizAttempt.findAll({
           where: {
             student_id: student.id,
-            quiz_id: quiz.id,
+            quiz_id: { [Op.in]: quizzes.map((q) => q.id) },
           },
+          attributes: ["id", "quiz_id", "score"],
         });
+        const existingMap = new Map(existing.map((e) => [e.quiz_id, e]));
 
-        if (existingAttempt) {
-          await existingAttempt.update({
-            status: "submitted",
-            passed: true,
-            score: existingAttempt.score || 100,
-            submitted_at: completedAt,
-          });
-        } else {
-          await QuizAttempt.create({
+        const toCreate = quizzes
+          .filter((q) => !existingMap.has(q.id))
+          .map((q) => ({
             student_id: student.id,
-            quiz_id: quiz.id,
+            quiz_id: q.id,
             attempt_number: 1,
             started_at: completedAt,
             submitted_at: completedAt,
             status: "submitted",
             passed: true,
             score: 100,
-          });
+          }));
+
+        if (toCreate.length) {
+          await QuizAttempt.bulkCreate(toCreate);
         }
 
-        processed += 1;
+        const existingIds = existing.map((e) => e.id);
+        if (existingIds.length) {
+          await QuizAttempt.update(
+            {
+              status: "submitted",
+              passed: true,
+              submitted_at: completedAt,
+            },
+            { where: { id: { [Op.in]: existingIds } } }
+          );
+        }
+        processed += quizzes.length;
       }
 
+      // ---- Assignments: batch ----
       const assignments = await Assignment.findAll({
-        where: {
-          chapter_id: { [Op.in]: chapterIds },
-        },
+        where: { chapter_id: { [Op.in]: chapterIds } },
         attributes: ["id"],
       });
-
       totalAssignments += assignments.length;
 
-      for (const assignment of assignments) {
-        await this.assertNotCancelled(job);
+      if (assignments.length) {
+        const existing = await Submission.findAll({
+          where: {
+            student_id: student.id,
+            assignment_id: { [Op.in]: assignments.map((a) => a.id) },
+          },
+          attributes: ["id", "assignment_id"],
+        });
+        const existingSet = new Set(existing.map((e) => e.assignment_id));
 
-        const [submission, created] =
-          await Submission.findOrCreate({
-            where: {
-              student_id: student.id,
-              assignment_id: assignment.id,
-            },
-            defaults: {
-              status: "approved",
-              file_url: "-",
-              marks: 100,
-              mentor_comments:
-                "Auto-approved through bulk automation",
-            },
-          });
+        const toCreate = assignments
+          .filter((a) => !existingSet.has(a.id))
+          .map((a) => ({
+            student_id: student.id,
+            assignment_id: a.id,
+            status: "approved",
+            file_url: "-",
+            marks: 100,
+            mentor_comments: "Auto-approved through bulk automation",
+          }));
 
-        if (!created) {
-          await submission.update({ status: "approved" });
+        if (toCreate.length) {
+          await Submission.bulkCreate(toCreate);
         }
 
-        processed += 1;
+        const existingIds = existing.map((e) => e.id);
+        if (existingIds.length) {
+          await Submission.update(
+            { status: "approved" },
+            { where: { id: { [Op.in]: existingIds } } }
+          );
+        }
+        processed += assignments.length;
+      }
+
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, processed);
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       quizzes_attempted: totalQuizzes,
       assignments_submitted: totalAssignments,
       completed_at: completedAt.toISOString(),
@@ -1043,31 +1061,27 @@ class BulkJobRunner extends EventEmitter {
     if (!options.silent) {
       await this.updateProgress(job, processed, processed, result);
     }
-
     return result;
   }
 
+  /* -------------------- Complete Internship -------------------- */
+
   async completeInternship(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const completedAt = this.resolveDateTime(
-      payload.completed_at || payload.end_date,
+      payload.completed_at || payload.end_date
     );
 
+    let endDate = payload.end_date || completedAt.toISOString().slice(0, 10);
+    if (endDate === "" || endDate === undefined) endDate = null;
+
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
-
-      let endDate = payload.end_date || (completedAt ? completedAt.toISOString().slice(0, 10) : null);
-      
-      if (endDate === "" || endDate === undefined) {
-        endDate = null;
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
       }
 
       const academics = {
@@ -1086,145 +1100,113 @@ class BulkJobRunner extends EventEmitter {
       });
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       internship_status: "completed",
       completed_at: completedAt.toISOString(),
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
+
+  /* -------------------- Assessment -------------------- */
 
   assessmentDetails(payload) {
     const ratings = {
       technical_knowledge: Number(
         payload.technical_knowledge ??
-          payload.criteria_ratings_json?.technical_knowledge ??
-          5,
+          payload.criteria_ratings_json?.technical_knowledge ?? 5
       ),
       quality_of_work: Number(
         payload.quality_of_work ??
-          payload.criteria_ratings_json?.quality_of_work ??
-          5,
+          payload.criteria_ratings_json?.quality_of_work ?? 5
       ),
       initiative: Number(
-        payload.initiative ??
-          payload.criteria_ratings_json?.initiative ??
-          5,
+        payload.initiative ?? payload.criteria_ratings_json?.initiative ?? 5
       ),
       communication: Number(
         payload.communication ??
-          payload.criteria_ratings_json?.communication ??
-          5,
+          payload.criteria_ratings_json?.communication ?? 5
       ),
       professional_conduct: Number(
         payload.professional_conduct ??
-          payload.criteria_ratings_json?.professional_conduct ??
-          5,
+          payload.criteria_ratings_json?.professional_conduct ?? 5
       ),
     };
 
     const values = Object.values(ratings);
-
     const maximumRating = Number(payload.max_rating || 5);
-
     const percentage =
       values.length > 0
         ? Number(
             (
-              (values.reduce((sum, value) => sum + value, 0) /
+              (values.reduce((sum, v) => sum + v, 0) /
                 (values.length * maximumRating)) *
               100
-            ).toFixed(2),
+            ).toFixed(2)
           )
         : 0;
 
     let performance = "Needs Improvement";
-
-    if (percentage >= 90) {
-      performance = "Outstanding";
-    } else if (percentage >= 80) {
-      performance = "Excellent";
-    } else if (percentage >= 70) {
-      performance = "Very Good";
-    } else if (percentage >= 60) {
-      performance = "Good";
-    } else if (percentage >= 50) {
-      performance = "Satisfactory";
-    }
+    if (percentage >= 90) performance = "Outstanding";
+    else if (percentage >= 80) performance = "Excellent";
+    else if (percentage >= 70) performance = "Very Good";
+    else if (percentage >= 60) performance = "Good";
+    else if (percentage >= 50) performance = "Satisfactory";
 
     return { ratings, percentage, performance };
   }
 
   async generateAssessment(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const assessedAt = this.resolveDateTime(
-      payload.assessed_at || payload.completed_at,
+      payload.assessed_at || payload.completed_at
     );
-
     const details = this.assessmentDetails(payload);
-
     const assessmentType = payload.assessment_type || "final";
 
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
-      const mentorId = Number(
-        payload.mentor_id || student.mentor_id,
-      );
-
+      const mentorId = Number(payload.mentor_id || student.mentor_id);
       if (!mentorId) {
         throw new Error(
-          `Mentor is not assigned for student ${student.registration_number}`,
+          `Mentor is not assigned for student ${student.registration_number}`
         );
       }
 
-      const [assessment, created] =
-        await Assessment.findOrCreate({
-          where: {
-            student_id: student.id,
-            assessment_type: assessmentType,
-          },
-          defaults: {
-            mentor_id: mentorId,
-            criteria_ratings_json: details.ratings,
-            overall_performance: details.performance,
-            supervisor_remarks:
-              payload.supervisor_remarks ||
-              "Assessment completed through bulk automation",
-            status: payload.assessment_status || "approved",
-            assessed_at: assessedAt,
-            approved_at: assessedAt,
-            approved_by: job.created_by || null,
-          },
-        });
+      const [assessment, created] = await Assessment.findOrCreate({
+        where: {
+          student_id: student.id,
+          assessment_type: assessmentType,
+        },
+        defaults: {
+          mentor_id: mentorId,
+          criteria_ratings_json: details.ratings,
+          overall_performance: details.performance,
+          supervisor_remarks:
+            payload.supervisor_remarks ||
+            "Assessment completed through bulk automation",
+          status: payload.assessment_status || "approved",
+          assessed_at: assessedAt,
+          approved_at: assessedAt,
+          approved_by: job.created_by || null,
+        },
+      });
 
       if (!created) {
         await assessment.update({
@@ -1232,8 +1214,7 @@ class BulkJobRunner extends EventEmitter {
           criteria_ratings_json: details.ratings,
           overall_performance: details.performance,
           supervisor_remarks:
-            payload.supervisor_remarks ||
-            assessment.supervisor_remarks,
+            payload.supervisor_remarks || assessment.supervisor_remarks,
           status: payload.assessment_status || "approved",
           assessed_at: assessedAt,
           approved_at: assessedAt,
@@ -1242,19 +1223,14 @@ class BulkJobRunner extends EventEmitter {
       }
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
-      assessments: students.length,
+      students: studentCount,
+      assessments: studentCount,
       assessment_type: assessmentType,
       percentage: details.percentage,
       overall_performance: details.performance,
@@ -1262,16 +1238,12 @@ class BulkJobRunner extends EventEmitter {
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
+
+  /* -------------------- Publish Results -------------------- */
 
   gradeFromPercentage(percentage) {
     if (percentage >= 90) return "A+";
@@ -1287,44 +1259,35 @@ class BulkJobRunner extends EventEmitter {
     if (payload.score_percentage !== undefined) {
       return Number(payload.score_percentage);
     }
-
     const criteria = assessment?.criteria_ratings_json || {};
-
     const values = Object.values(criteria)
       .map(Number)
-      .filter((value) => !Number.isNaN(value));
-
-    if (values.length === 0) {
-      return 0;
-    }
-
+      .filter((v) => !Number.isNaN(v));
+    if (values.length === 0) return 0;
     const maximumRating = Number(payload.max_rating || 5);
-
     return Number(
       (
-        (values.reduce((sum, value) => sum + value, 0) /
+        (values.reduce((sum, v) => sum + v, 0) /
           (values.length * maximumRating)) *
         100
-      ).toFixed(2),
+      ).toFixed(2)
     );
   }
 
   async publishResults(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const publishedAt = this.resolveDateTime(
-      payload.published_at || payload.completed_at,
+      payload.published_at || payload.completed_at
     );
 
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const assessment = await Assessment.findOne({
         where: {
@@ -1336,39 +1299,26 @@ class BulkJobRunner extends EventEmitter {
 
       if (!assessment) {
         throw new Error(
-          `Assessment not found for student ${student.registration_number}`,
+          `Assessment not found for student ${student.registration_number}`
         );
       }
 
-      const randomScore = Number(
-        (Math.random() * 6 + 89).toFixed(2),
-      );
+      // ✅ PRODUCTION FIX: Deterministic score (no Math.random)
+      const score =
+        payload.score_percentage !== undefined
+          ? Number(payload.score_percentage)
+          : this.percentageFromAssessment(assessment, payload);
 
-      let grade = "A+";
-      if (randomScore >= 90) {
-        grade = "A+";
-      } else if (randomScore >= 80) {
-        grade = "A";
-      } else if (randomScore >= 70) {
-        grade = "B+";
-      } else if (randomScore >= 60) {
-        grade = "B";
-      } else if (randomScore >= 50) {
-        grade = "C";
-      } else if (randomScore >= 40) {
-        grade = "D";
-      } else {
-        grade = "F";
-      }
-
-      const passed = randomScore >= Number(payload.pass_percentage || 40);
+      const finalScore = score > 0 ? score : 90; // fallback if no ratings
+      const grade = this.gradeFromPercentage(finalScore);
+      const passed = finalScore >= Number(payload.pass_percentage || 40);
 
       const [result, created] = await Result.findOrCreate({
         where: { student_id: student.id },
         defaults: {
           assessment_id: assessment.id,
-          score_percentage: randomScore,
-          grade: grade,
+          score_percentage: finalScore,
+          grade,
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1382,8 +1332,8 @@ class BulkJobRunner extends EventEmitter {
       if (!created) {
         await result.update({
           assessment_id: assessment.id,
-          score_percentage: randomScore,
-          grade: grade,
+          score_percentage: finalScore,
+          grade,
           result_status: passed ? "passed" : "failed",
           status: "published",
           published_at: publishedAt,
@@ -1398,8 +1348,8 @@ class BulkJobRunner extends EventEmitter {
           assessment,
           result,
           generatedAt: publishedAt,
-          percentage: randomScore,
-          grade: grade,
+          percentage: finalScore,
+          grade,
           resultStatus: result.result_status,
           performance: assessment.overall_performance,
         });
@@ -1413,65 +1363,49 @@ class BulkJobRunner extends EventEmitter {
           generated_at: publishedAt,
           assessment_id: assessment.id,
           result_id: result.id,
-          percentage: randomScore,
-          grade: grade,
-        },
+          percentage: finalScore,
+          grade,
+        }
       );
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
-      results_published: students.length,
+      students: studentCount,
+      results_published: studentCount,
       published_at: publishedAt.toISOString(),
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
+
+  /* -------------------- Document helper -------------------- */
 
   studentFolder(student) {
     return sanitizeName(
       student.registration_number ||
         student.student_id ||
-        `student-${student.id}`,
+        `student-${student.id}`
     );
   }
 
-  async saveGeneratedDocument(
-    studentId,
-    type,
-    fileUrl,
-    job,
-    metadata = {},
-  ) {
-    const [document, created] =
-      await GeneratedDocument.findOrCreate({
-        where: { student_id: studentId, type },
-        defaults: {
-          file_url: fileUrl,
-          generated_at: metadata.generated_at || new Date(),
-          generated_by: job.created_by || null,
-          metadata_json: metadata,
-        },
-      });
+  async saveGeneratedDocument(studentId, type, fileUrl, job, metadata = {}) {
+    const [document, created] = await GeneratedDocument.findOrCreate({
+      where: { student_id: studentId, type },
+      defaults: {
+        file_url: fileUrl,
+        generated_at: metadata.generated_at || new Date(),
+        generated_by: job.created_by || null,
+        metadata_json: metadata,
+      },
+    });
 
     if (!created) {
       await document.update({
@@ -1485,23 +1419,21 @@ class BulkJobRunner extends EventEmitter {
     return document;
   }
 
+  /* -------------------- Acceptance Letters -------------------- */
+
   async generateAcceptanceLetters(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
-    const generatedAt = this.resolveDateTime(
-      payload.generated_at,
-    );
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
+    const generatedAt = this.resolveDateTime(payload.generated_at);
 
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const documentResult =
         await bulkPdfDocumentService.generateOfferLetter({
@@ -1513,9 +1445,7 @@ class BulkJobRunner extends EventEmitter {
           internshipEndDate:
             payload.end_date || student.internship_end_date,
           totalHours: Number(
-            payload.total_hours ||
-              student.domain?.duration_hours ||
-              120,
+            payload.total_hours || student.domain?.duration_hours || 120
           ),
         });
 
@@ -1526,9 +1456,8 @@ class BulkJobRunner extends EventEmitter {
         job,
         {
           generated_at: generatedAt,
-          letter_reference:
-            documentResult.letter_reference || null,
-        },
+          letter_reference: documentResult.letter_reference || null,
+        }
       );
 
       files.push({
@@ -1537,179 +1466,188 @@ class BulkJobRunner extends EventEmitter {
       });
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       acceptance_letters: files.length,
-      files,
+      files: capArray(files),
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
 
+  /* -------------------- Attendance fetch helper -------------------- */
+
   async getAttendance(studentId, payload) {
     const where = { student_id: studentId };
-
     if (payload.start_date && payload.end_date) {
-      where.date = {
-        [Op.between]: [
-          payload.start_date,
-          payload.end_date,
-        ],
-      };
+      where.date = { [Op.between]: [payload.start_date, payload.end_date] };
     }
-
-    return Attendance.findAll({
-      where,
-      order: [["date", "ASC"]],
-    });
+    return Attendance.findAll({ where, order: [["date", "ASC"]] });
   }
 
-   // ✅ FIX: Purani gandi entries ko PDF me aane se rokne ke liye filter lagaya
-  async generateAttendanceSheets(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
+  /* -------------------- Attendance Sheets -------------------- */
 
-    const students = await this.getStudents(payload);
+  async generateAttendanceSheets(job, options = {}) {
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const generatedAt = this.resolveDateTime(payload.generated_at);
-    
-    // Holidays list
+
     const holidays = new Set(
-      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
+      Array.isArray(payload.holidays)
+        ? payload.holidays.map((h) => String(h).trim())
+        : []
     );
 
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const attendance = await this.getAttendance(student.id, payload);
 
-      // ✅ BULLETPROOF FIX: Database me se Sunday aur Holidays ko hatao
       const validAttendance = attendance.filter((record) => {
         const dateStr = String(record.date).slice(0, 10);
         const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-        // Sunday (0) nahi hona chahiye aur Holiday list me nahi hona chahiye
         return dayOfWeek !== 0 && !holidays.has(dateStr);
       });
 
       const completedHours = validAttendance.reduce(
-        (total, record) => total + Number(record.learning_hours || 0),
-        0,
+        (total, r) => total + Number(r.learning_hours || 0),
+        0
       );
 
       const documentResult =
         await bulkPdfDocumentService.generateAttendanceLog({
           student,
-          attendance: validAttendance, // ✅ Filtered data pass kiya
+          attendance: validAttendance,
           generatedAt,
-          totalRequiredHours: Number(payload.total_hours || student.domain?.duration_hours || 120),
+          totalRequiredHours: Number(
+            payload.total_hours || student.domain?.duration_hours || 120
+          ),
           completedHours,
-          supervisorName: student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
-          organizationName: payload.organization_name || "RKNEXORA PRIVATE LIMITED",
-          officeAddress: payload.office_address || "Biscuit Factory Road, Mithila Colony, Patna, Bihar 801503",
+          supervisorName:
+            student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
+          organizationName:
+            payload.organization_name || "RKNEXORA PRIVATE LIMITED",
+          officeAddress:
+            payload.office_address ||
+            "Biscuit Factory Road, Mithila Colony, Patna, Bihar 801503",
           organizationPhone: payload.organization_phone || "7544090878",
         });
 
-      await this.saveGeneratedDocument(student.id, "attendance_sheet", documentResult.file_url, job, {
+      await this.saveGeneratedDocument(
+        student.id,
+        "attendance_sheet",
+        documentResult.file_url,
+        job,
+        {
           generated_at: generatedAt,
           records: validAttendance.length,
           completed_hours: completedHours,
-      });
+        }
+      );
 
       files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(job, processed, students.length);
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
-    const result = { students: students.length, attendance_sheets: files.length, files };
+    const result = {
+      students: studentCount,
+      attendance_sheets: files.length,
+      files: capArray(files),
+    };
     if (!options.silent) {
-      await this.updateProgress(job, students.length, students.length, result);
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
     return result;
   }
 
-  // ✅ FIX: Logbook ke liye bhi wahi filter lagaya
-  async generateLogBooks(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
+  /* -------------------- Logbooks -------------------- */
 
-    const students = await this.getStudents(payload);
+  async generateLogBooks(job, options = {}) {
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const generatedAt = this.resolveDateTime(payload.generated_at);
 
     const holidays = new Set(
-      Array.isArray(payload.holidays) ? payload.holidays.map(h => String(h).trim()) : []
+      Array.isArray(payload.holidays)
+        ? payload.holidays.map((h) => String(h).trim())
+        : []
     );
 
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const attendance = await this.getAttendance(student.id, payload);
 
-      // ✅ BULLETPROOF FIX: Database me se Sunday aur Holidays ko hatao
       const validAttendance = attendance.filter((record) => {
         const dateStr = String(record.date).slice(0, 10);
         const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
         return dayOfWeek !== 0 && !holidays.has(dateStr);
       });
 
-      for (let index = 0; index < validAttendance.length; index += 1) {
-        const record = validAttendance[index];
+      // Batch insert logbook entries
+      const entriesToUpsert = validAttendance.map((record, index) => {
         const domainName = student.domain?.domain_name || "";
         const domainEntry = getDomainLogbookEntry(domainName, index);
+        return {
+          student_id: student.id,
+          date: record.date,
+          activity:
+            domainEntry.activity ||
+            record.remarks ||
+            payload.daily_activity ||
+            "Completed assigned learning modules and internship activities.",
+          skills:
+            domainEntry.skills ||
+            payload.skills ||
+            "Technical learning, communication and professional skills",
+          hours_worked: record.learning_hours || 0,
+        };
+      });
 
-        const activity = domainEntry.activity || record.remarks || payload.daily_activity || "Completed assigned learning modules and internship activities.";
-        const skills = domainEntry.skills || payload.skills || "Technical learning, communication and professional skills";
-
-        const [entry, created] = await Logbook.findOrCreate({
-          where: { student_id: student.id, date: record.date },
-          defaults: { activity, skills, hours_worked: record.learning_hours || 0 },
+      if (entriesToUpsert.length) {
+        await Logbook.bulkCreate(entriesToUpsert, {
+          updateOnDuplicate: ["activity", "skills", "hours_worked", "updated_at"],
         });
-
-        if (!created) {
-          await entry.update({ activity, skills: skills || entry.skills, hours_worked: record.learning_hours || entry.hours_worked || 0 });
-        }
       }
 
       if (holidays.size > 0) {
         await Logbook.destroy({
-          where: { student_id: student.id, date: { [Op.in]: Array.from(holidays) } },
+          where: {
+            student_id: student.id,
+            date: { [Op.in]: Array.from(holidays) },
+          },
         });
       }
 
       const entries = await Logbook.findAll({
         where: {
           student_id: student.id,
-          ...(payload.start_date && payload.end_date ? { date: { [Op.between]: [payload.start_date, payload.end_date] } } : {}),
+          ...(payload.start_date && payload.end_date
+            ? { date: { [Op.between]: [payload.start_date, payload.end_date] } }
+            : {}),
         },
         order: [["date", "ASC"]],
       });
@@ -1718,82 +1656,91 @@ class BulkJobRunner extends EventEmitter {
         student,
         entries,
         generatedAt,
-        supervisorName: student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
+        supervisorName:
+          student.mentor?.name || payload.supervisor_name || "Rahul Kumar",
       });
 
-      await this.saveGeneratedDocument(student.id, "logbook", documentResult.file_url, job, {
-          generated_at: generatedAt,
-          entries: entries.length,
-      });
+      await this.saveGeneratedDocument(
+        student.id,
+        "logbook",
+        documentResult.file_url,
+        job,
+        { generated_at: generatedAt, entries: entries.length }
+      );
 
       files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(job, processed, students.length);
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
-    const result = { students: students.length, logbooks: files.length, files };
+    const result = {
+      students: studentCount,
+      logbooks: files.length,
+      files: capArray(files),
+    };
     if (!options.silent) {
-      await this.updateProgress(job, students.length, students.length, result);
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
     return result;
   }
 
-  async generateInternshipReports(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
+  /* -------------------- Internship Reports -------------------- */
 
-    const students = await this.getStudents(payload);
+  async generateInternshipReports(job, options = {}) {
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    const STATIC_REPORTS_DIR = path.resolve("src", "assets", "static-reports");
-
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const domainName = student.domain?.domain_name || "";
-      
+
       let sourcePdfPath = path.join(STATIC_REPORTS_DIR, `${domainName}.pdf`);
-      
+
       if (!fs.existsSync(sourcePdfPath)) {
-        const filesInDir = fs.readdirSync(STATIC_REPORTS_DIR);
-        const matchedFile = filesInDir.find(file => {
-          const fileBase = file.replace(/\.pdf$/i, "").toLowerCase();
-          const domainBase = domainName.toLowerCase();
-          return fileBase === domainBase || 
-                 fileBase.includes(domainBase) || 
-                 domainBase.includes(fileBase);
-        });
-        
-        if (matchedFile) {
-          sourcePdfPath = path.join(STATIC_REPORTS_DIR, matchedFile);
+        try {
+          const filesInDir = fs.readdirSync(STATIC_REPORTS_DIR);
+          const matchedFile = filesInDir.find((file) => {
+            const fileBase = file.replace(/\.pdf$/i, "").toLowerCase();
+            const domainBase = domainName.toLowerCase();
+            return (
+              fileBase === domainBase ||
+              fileBase.includes(domainBase) ||
+              domainBase.includes(fileBase)
+            );
+          });
+          if (matchedFile) {
+            sourcePdfPath = path.join(STATIC_REPORTS_DIR, matchedFile);
+          }
+        } catch (err) {
+          console.warn("[bulkJobRunner] Could not read static reports dir:", err.message);
         }
       }
 
       if (!fs.existsSync(sourcePdfPath)) {
-        console.warn(`⚠️ Static PDF not found for domain: "${domainName}"`);
+        console.warn(
+          `⚠️ [bulkJobRunner] Static PDF not found for domain: "${domainName}" (student ${student.id})`
+        );
         processed += 1;
-        if (!options.silent) {
-          await this.updateProgress(job, processed, students.length);
+        if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+          await this.updateProgress(job, processed, studentCount);
         }
         continue;
       }
 
-      const studentFolder = this.studentFolder(student);
-      const destinationDir = path.resolve("uploads", "generated", studentFolder);
-      
-      if (!fs.existsSync(destinationDir)) {
-        fs.mkdirSync(destinationDir, { recursive: true });
-      }
+      const folder = this.studentFolder(student);
+      const destinationDir = path.resolve("uploads", "generated", folder);
+      ensureDir(destinationDir);
 
       const destinationPath = path.join(destinationDir, "internship-report.pdf");
       fs.copyFileSync(sourcePdfPath, destinationPath);
-
       const fileUrl = toPublicUrl(destinationPath);
 
       const [report, created] = await InternshipReport.findOrCreate({
@@ -1801,7 +1748,9 @@ class BulkJobRunner extends EventEmitter {
         defaults: {
           report_url: fileUrl,
           status: "approved",
-          mentor_remarks: payload.report_remarks || "Report generated through bulk automation",
+          mentor_remarks:
+            payload.report_remarks ||
+            "Report generated through bulk automation",
         },
       });
 
@@ -1818,63 +1767,50 @@ class BulkJobRunner extends EventEmitter {
         "internship_report",
         fileUrl,
         job,
-        { generated_at: new Date() },
+        { generated_at: new Date() }
       );
 
-      files.push({
-        student_id: student.id,
-        file_url: fileUrl,
-      });
-
+      files.push({ student_id: student.id, file_url: fileUrl });
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(job, processed, students.length);
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const response = {
-      students: students.length,
+      students: studentCount,
       internship_reports: files.length,
-      files,
+      files: capArray(files),
     };
-
     if (!options.silent) {
-      await this.updateProgress(job, students.length, students.length, response);
+      await this.updateProgress(job, studentCount, studentCount, response);
     }
-
     return response;
   }
 
+  /* -------------------- Certificates -------------------- */
+
   async generateCertificates(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
-    const generatedAt = this.resolveDateTime(
-      payload.generated_at,
-    );
-
-    const issuedDate =
-      payload.issued_date ||
-      generatedAt.toISOString().slice(0, 10);
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
+    const generatedAt = this.resolveDateTime(payload.generated_at);
+    const issuedDate = payload.issued_date || generatedAt.toISOString().slice(0, 10);
 
     const files = [];
     const skipped = [];
     const failed = [];
-
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       try {
         const eligibility = await getStudentEligibility(
           student.id,
-          student.domain_id,
+          student.domain_id
         );
 
         if (!eligibility.eligible) {
@@ -1890,37 +1826,22 @@ class BulkJobRunner extends EventEmitter {
           });
 
           processed += 1;
-
-          if (!options.silent) {
-            await this.updateProgress(
-              job,
-              processed,
-              students.length,
-              undefined,
-              {
-                success_count: files.length,
-                failed_count: skipped.length + failed.length,
-              },
-            );
+          if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+            await this.updateProgress(job, processed, studentCount, undefined, {
+              success_count: files.length,
+              failed_count: skipped.length + failed.length,
+            });
           }
-
           continue;
         }
 
         const certificateNumber = `${
           payload.certificate_prefix || "RKN"
-        }-${new Date(issuedDate).getFullYear()}-${String(
-          student.id,
-        ).padStart(7, "0")}`;
+        }-${new Date(issuedDate).getFullYear()}-${String(student.id).padStart(7, "0")}`;
 
         const verificationUrl = `${
           process.env.CLIENT_URL || "http://localhost:3000"
-        }/verify-certificate/${encodeURIComponent(
-          certificateNumber,
-        )}`;
-
-        const domainName = student.domain?.domain_name || "";
-        const gender = student.gender || "";
+        }/verify-certificate/${encodeURIComponent(certificateNumber)}`;
 
         const documentResult =
           await bulkPdfDocumentService.generateCertificate({
@@ -1930,29 +1851,24 @@ class BulkJobRunner extends EventEmitter {
             issuedDate,
             generatedAt,
             totalHours: Number(
-              payload.total_hours ||
-                student.domain?.duration_hours ||
-                120,
+              payload.total_hours || student.domain?.duration_hours || 120
             ),
           });
 
         if (!documentResult?.file_url) {
-          throw new Error(
-            "Certificate PDF service did not return file_url",
-          );
+          throw new Error("Certificate PDF service did not return file_url");
         }
 
-        const [certificate, created] =
-          await Certificate.findOrCreate({
-            where: { student_id: student.id },
-            defaults: {
-              certificate_number: certificateNumber,
-              certificate_url: documentResult.file_url,
-              qr_code_url: documentResult.qr_code_url,
-              verification_url: verificationUrl,
-              issued_date: issuedDate,
-            },
-          });
+        const [certificate, created] = await Certificate.findOrCreate({
+          where: { student_id: student.id },
+          defaults: {
+            certificate_number: certificateNumber,
+            certificate_url: documentResult.file_url,
+            qr_code_url: documentResult.qr_code_url,
+            verification_url: verificationUrl,
+            issued_date: issuedDate,
+          },
+        });
 
         if (!created) {
           await certificate.update({
@@ -1979,7 +1895,7 @@ class BulkJobRunner extends EventEmitter {
             certificate_number: certificateNumber,
             qr_code_url: documentResult.qr_code_url,
             verification_url: verificationUrl,
-          },
+          }
         );
 
         files.push({
@@ -1991,93 +1907,68 @@ class BulkJobRunner extends EventEmitter {
         });
       } catch (error) {
         console.error(
-          `Certificate failed for student ${student.registration_number}:`,
-          error,
+          `[bulkJobRunner] Certificate failed for student ${student.registration_number}:`,
+          error
         );
 
         failed.push({
           student_id: student.id,
           registration_number: student.registration_number,
-          error:
-            error?.message || "Certificate generation failed",
+          error: error?.message || "Certificate generation failed",
         });
       }
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-          undefined,
-          {
-            success_count: files.length,
-            failed_count: skipped.length + failed.length,
-          },
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount, undefined, {
+          success_count: files.length,
+          failed_count: skipped.length + failed.length,
+        });
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       certificates: files.length,
       skipped_count: skipped.length,
       failed_count: failed.length,
       issued_date: issuedDate,
-      files,
-      skipped,
-      failed,
+      files: capArray(files),
+      skipped: capArray(skipped, 100),
+      failed: capArray(failed, 100),
     };
 
-    if (students.length > 0 && files.length === 0) {
-      console.warn(
-        `[generateCertificates] Job ${job.job_uuid}: no certificates generated.`,
-      );
-      console.warn("Skipped:", JSON.stringify(skipped, null, 2));
-      console.warn("Failed:", JSON.stringify(failed, null, 2));
-    }
-
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-        {
-          success_count: files.length,
-          failed_count: skipped.length + failed.length,
-        },
-      );
+      await this.updateProgress(job, studentCount, studentCount, result, {
+        success_count: files.length,
+        failed_count: skipped.length + failed.length,
+      });
     }
-
     return result;
   }
 
+  /* -------------------- Department Certificates -------------------- */
+
   async generateDepartmentCertificates(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const generatedAt = this.resolveDateTime(payload.generated_at);
 
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const documentResult =
         await bulkPdfDocumentService.generateDepartmentCertificate({
           student,
           generatedAt,
           totalHours: Number(
-            payload.total_hours ||
-              student.domain?.duration_hours ||
-              120,
+            payload.total_hours || student.domain?.duration_hours || 120
           ),
         });
 
@@ -2086,60 +1977,49 @@ class BulkJobRunner extends EventEmitter {
         "department_certificate",
         documentResult.file_url,
         job,
-        {
-          generated_at: generatedAt,
-        },
+        { generated_at: generatedAt }
       );
 
-      files.push({
-        student_id: student.id,
-        file_url: documentResult.file_url,
-      });
-
+      files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(job, processed, students.length);
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       department_certificates: files.length,
-      files,
+      files: capArray(files),
     };
-
     if (!options.silent) {
-      await this.updateProgress(job, students.length, students.length, result);
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
 
+  /* -------------------- Consent Letters -------------------- */
+
   async generateConsentLetters(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
-
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
     const generatedAt = this.resolveDateTime(payload.generated_at);
 
     const files = [];
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const documentResult =
         await bulkPdfDocumentService.generateConsentLetter({
           student,
           generatedAt,
           totalHours: Number(
-            payload.total_hours ||
-              student.domain?.duration_hours ||
-              120,
+            payload.total_hours || student.domain?.duration_hours || 120
           ),
         });
 
@@ -2148,88 +2028,83 @@ class BulkJobRunner extends EventEmitter {
         "consent_letter",
         documentResult.file_url,
         job,
-        {
-          generated_at: generatedAt,
-        },
+        { generated_at: generatedAt }
       );
 
-      files.push({
-        student_id: student.id,
-        file_url: documentResult.file_url,
-      });
-
+      files.push({ student_id: student.id, file_url: documentResult.file_url });
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(job, processed, students.length);
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
     const result = {
-      students: students.length,
+      students: studentCount,
       consent_letters: files.length,
-      files,
+      files: capArray(files),
     };
-
     if (!options.silent) {
-      await this.updateProgress(job, students.length, students.length, result);
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
 
-  resolveFilePath(url) {
-    if (!url) {
-      return null;
-    }
+  /* -------------------- ZIP -------------------- */
 
+  resolveFilePath(url) {
+    if (!url) return null;
     const localPath = String(url)
       .replace(/^https?:\/\/[^/]+/i, "")
       .replace(/^\/+/, "");
-
     return path.resolve(localPath);
   }
 
   addFileToArchive(archive, url, archiveName) {
     const absolutePath = this.resolveFilePath(url);
-
-    if (!absolutePath || !fs.existsSync(absolutePath)) {
-      return false;
-    }
-
+    if (!absolutePath || !fs.existsSync(absolutePath)) return false;
     archive.file(absolutePath, { name: archiveName });
-
     return true;
   }
 
   async generateZip(job, options = {}) {
-    const payload = {
-      ...(job.payload || {}),
-      ...(options.payload || {}),
-    };
-
-    const students = await this.getStudents(payload);
+    const payload = { ...(job.payload || {}), ...(options.payload || {}) };
 
     ensureDir(ZIP_ROOT);
 
-    const zipPath = path.join(
-      ZIP_ROOT,
-      `${job.job_uuid}.zip`,
-    );
-
+    const zipPath = path.join(ZIP_ROOT, `${job.job_uuid}.zip`);
     const output = fs.createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 9 } });
 
-    const archive = archiver("zip", {
-      zlib: { level: 9 },
+    /*
+     * ✅ PRODUCTION FIX: Attach listeners BEFORE piping/finalize.
+     * Original code attached 'close' AFTER finalize -> hangs forever.
+     */
+    const closePromise = new Promise((resolve, reject) => {
+      output.on("close", () => {
+        resolve({ size: archive.pointer() });
+      });
+      output.on("error", reject);
+      archive.on("error", reject);
+      archive.on("warning", (err) => {
+        if (err.code === "ENOENT") {
+          console.warn("[bulkJobRunner] Archive warning:", err.message);
+        } else {
+          reject(err);
+        }
+      });
     });
 
     archive.pipe(output);
 
     let fileCount = 0;
     let processed = 0;
+    let studentCount = 0;
 
-    for (const student of students) {
-      await this.assertNotCancelled(job);
+    for await (const student of this.iterateStudents(payload)) {
+      studentCount += 1;
+      if (studentCount % CANCEL_CHECK_EVERY === 0) {
+        await this.assertNotCancelled(job);
+      }
 
       const folder = this.studentFolder(student);
 
@@ -2238,27 +2113,25 @@ class BulkJobRunner extends EventEmitter {
       });
 
       for (const document of documents) {
-        const extension =
-          path.extname(document.file_url || "") || ".pdf";
+        const extension = path.extname(document.file_url || "") || ".pdf";
 
         if (
           this.addFileToArchive(
             archive,
             document.file_url,
-            `${folder}/generated/${document.type}${extension}`,
+            `${folder}/generated/${document.type}${extension}`
           )
         ) {
           fileCount += 1;
         }
 
         const metadata = document.metadata_json || {};
-
         if (
           metadata.qr_code_url &&
           this.addFileToArchive(
             archive,
             metadata.qr_code_url,
-            `${folder}/generated/certificate-qr.png`,
+            `${folder}/generated/certificate-qr.png`
           )
         ) {
           fileCount += 1;
@@ -2270,7 +2143,7 @@ class BulkJobRunner extends EventEmitter {
         this.addFileToArchive(
           archive,
           student.photo,
-          `${folder}/photo${path.extname(student.photo)}`,
+          `${folder}/photo${path.extname(student.photo)}`
         )
       ) {
         fileCount += 1;
@@ -2279,15 +2152,14 @@ class BulkJobRunner extends EventEmitter {
       const submissions = await Submission.findAll({
         where: { student_id: student.id },
       });
-
       submissions.forEach((submission, index) => {
         if (
           this.addFileToArchive(
             archive,
             submission.file_url,
             `${folder}/submissions/submission-${index + 1}${path.extname(
-              submission.file_url || "",
-            )}`,
+              submission.file_url || ""
+            )}`
           )
         ) {
           fileCount += 1;
@@ -2297,15 +2169,14 @@ class BulkJobRunner extends EventEmitter {
       const projects = await LiveProject.findAll({
         where: { student_id: student.id },
       });
-
       projects.forEach((project, index) => {
         if (
           this.addFileToArchive(
             archive,
             project.report_url,
             `${folder}/projects/project-${index + 1}${path.extname(
-              project.report_url || "",
-            )}`,
+              project.report_url || ""
+            )}`
           )
         ) {
           fileCount += 1;
@@ -2313,150 +2184,48 @@ class BulkJobRunner extends EventEmitter {
       });
 
       processed += 1;
-
-      if (!options.silent) {
-        await this.updateProgress(
-          job,
-          processed,
-          students.length,
-        );
+      if (!options.silent && processed % PROGRESS_UPDATE_EVERY === 0) {
+        await this.updateProgress(job, processed, studentCount);
       }
     }
 
+    // ✅ finalize ke baad hi wait
     await archive.finalize();
-
-    await new Promise((resolve, reject) => {
-      output.on("close", resolve);
-      output.on("error", reject);
-      archive.on("error", reject);
-    });
+    await closePromise;
 
     const result = {
-      students: students.length,
+      students: studentCount,
       files: fileCount,
       zip_url: toPublicUrl(zipPath),
+      zip_size_bytes: fs.existsSync(zipPath) ? fs.statSync(zipPath).size : 0,
     };
 
     if (!options.silent) {
-      await this.updateProgress(
-        job,
-        students.length,
-        students.length,
-        result,
-      );
+      await this.updateProgress(job, studentCount, studentCount, result);
     }
-
     return result;
   }
+
+  /* -------------------- Full process -------------------- */
 
   async runFullProcess(job) {
     const payload = job.payload || {};
 
     const steps = [
-      {
-        name: "consent_letters",
-        run: () => this.generateConsentLetters(job, { payload, silent: true }),
-      },
-      {
-        name: "acceptance_letters",
-        run: () =>
-          this.generateAcceptanceLetters(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "attendance",
-        run: () =>
-          this.generateAttendance(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "complete_learning",
-        run: () =>
-          this.completeLearning(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "quiz_attempts_and_submissions",
-        run: () =>
-          this.generateQuizAttemptsAndSubmissions(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "assessment",
-        run: () =>
-          this.generateAssessment(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "publish_results",
-        run: () =>
-          this.publishResults(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "attendance_sheets",
-        run: () =>
-          this.generateAttendanceSheets(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "log_books",
-        run: () =>
-          this.generateLogBooks(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "internship_reports",
-        run: () =>
-          this.generateInternshipReports(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "complete_internship",
-        run: () =>
-          this.completeInternship(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "department_certificates",
-        run: () => this.generateDepartmentCertificates(job, { payload, silent: true }),
-      },
-      {
-        name: "certificates",
-        run: () =>
-          this.generateCertificates(job, {
-            payload,
-            silent: true,
-          }),
-      },
-      {
-        name: "zip_documents",
-        run: () =>
-          this.generateZip(job, {
-            payload,
-            silent: true,
-          }),
-      },
+      { name: "consent_letters", run: () => this.generateConsentLetters(job, { payload, silent: true }) },
+      { name: "acceptance_letters", run: () => this.generateAcceptanceLetters(job, { payload, silent: true }) },
+      { name: "attendance", run: () => this.generateAttendance(job, { payload, silent: true }) },
+      { name: "complete_learning", run: () => this.completeLearning(job, { payload, silent: true }) },
+      { name: "quiz_attempts_and_submissions", run: () => this.generateQuizAttemptsAndSubmissions(job, { payload, silent: true }) },
+      { name: "assessment", run: () => this.generateAssessment(job, { payload, silent: true }) },
+      { name: "publish_results", run: () => this.publishResults(job, { payload, silent: true }) },
+      { name: "attendance_sheets", run: () => this.generateAttendanceSheets(job, { payload, silent: true }) },
+      { name: "log_books", run: () => this.generateLogBooks(job, { payload, silent: true }) },
+      { name: "internship_reports", run: () => this.generateInternshipReports(job, { payload, silent: true }) },
+      { name: "complete_internship", run: () => this.completeInternship(job, { payload, silent: true }) },
+      { name: "department_certificates", run: () => this.generateDepartmentCertificates(job, { payload, silent: true }) },
+      { name: "certificates", run: () => this.generateCertificates(job, { payload, silent: true }) },
+      { name: "zip_documents", run: () => this.generateZip(job, { payload, silent: true }) },
     ];
 
     const completed = [];
@@ -2464,67 +2233,39 @@ class BulkJobRunner extends EventEmitter {
 
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index];
-
       await this.assertNotCancelled(job);
-
-      await this.setCurrentStep(
-        job,
-        this.getJobStepLabel(step.name),
-      );
+      await this.setCurrentStep(job, this.getJobStepLabel(step.name));
 
       try {
         const result = await step.run();
-
-        completed.push({
-          name: step.name,
-          result,
-        });
+        completed.push({ name: step.name, result: this._sanitizeResult(result) });
       } catch (error) {
-        if (error instanceof BulkJobCancelledError) {
-          throw error;
-        }
+        if (error instanceof BulkJobCancelledError) throw error;
 
         failed.push({
           name: step.name,
-          error: error?.message || "Step failed",
+          error: String(error?.message || "Step failed").slice(0, 500),
         });
 
-        if (payload.stop_on_error !== false) {
-          throw error;
-        }
+        if (payload.stop_on_error !== false) throw error;
       }
 
-      await this.updateProgress(
-        job,
-        index + 1,
-        steps.length,
-        undefined,
-        {
-          success_count: completed.length,
-          failed_count: failed.length,
-        },
-      );
+      await this.updateProgress(job, index + 1, steps.length, undefined, {
+        success_count: completed.length,
+        failed_count: failed.length,
+      });
     }
 
-    const zipStep = completed.find(
-      (step) => step.name === "zip_documents",
-    );
-
+    const zipStep = completed.find((s) => s.name === "zip_documents");
     const result = {
       completed_steps: completed.length,
       failed_steps: failed.length,
       completed,
-      failed,
+      failed: capArray(failed, 100),
       zip_url: zipStep?.result?.zip_url || null,
     };
 
-    await this.updateProgress(
-      job,
-      steps.length,
-      steps.length,
-      result,
-    );
-
+    await this.updateProgress(job, steps.length, steps.length, result);
     return result;
   }
 }

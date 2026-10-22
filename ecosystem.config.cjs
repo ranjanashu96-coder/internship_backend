@@ -1,0 +1,30 @@
+module.exports = {
+  apps: [
+    {
+      name: "rknexora-backend",
+      script: "./src/server.js",
+      cwd: "/var/www/internship_backend",
+      instances: 1,
+      exec_mode: "fork",
+      env: { NODE_ENV: "production" },
+      max_memory_restart: "800M",
+      kill_timeout: 15000,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 4000,
+    },
+    {
+      name: "rknexora-worker",
+      script: "./src/worker.js",
+      cwd: "/var/www/internship_backend",
+      instances: 1,
+      exec_mode: "fork",
+      env: { NODE_ENV: "production" },
+      max_memory_restart: "500M",
+      kill_timeout: 15000,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 4000,
+    },
+  ],
+};

@@ -2,124 +2,42 @@ import "dotenv/config";
 
 import app from "./app.js";
 import sequelize from "./config/database.js";
-
 import "./models/index.js";
 
-import {
-  bulkJobRunner,
-} from "./jobs/bulkJobRunner.js";
-
-import {
-  startEmailQueueWorker,
-} from "./services/emailQueueWorker.js";
-
-import {
-  verifyEmailConnection,
-} from "./services/emailService.js";
-
-
-const port =
-  Number(
-    process.env.PORT ||
-      5000,
-  );
-
+const port = Number(process.env.PORT || 5000);
 
 try {
-  /*
-  |--------------------------------------------------------------------------
-  | Database Connection
-  |--------------------------------------------------------------------------
-  */
-
   await sequelize.authenticate();
+  console.log("✅ MySQL connected");
 
-  console.log(
-    "✅ MySQL connected",
-  );
+  const server = app.listen(port, () => {
+    console.log(`🚀 RKNexora API running on port ${port}`);
+  });
 
-
-  /*
-  |--------------------------------------------------------------------------
-  | Resume Pending Bulk Jobs
-  |--------------------------------------------------------------------------
-  */
-
-  try {
-    const resumedJobs =
-      await bulkJobRunner
-        .resumePendingJobs();
-
+  setInterval(() => {
+    const pool = sequelize.connectionManager.pool;
     console.log(
-      `🔄 Bulk jobs resumed: ${resumedJobs}`,
+      `[POOL] size=${pool.size} available=${pool.available} using=${pool.using} waiting=${pool.waiting}`
     );
-  } catch (error) {
-    console.error(
-      "❌ Bulk job resume failed:",
-      error,
-    );
-  }
+  }, 30000);
 
+  const shutdown = async (signal) => {
+    console.log(`\n${signal} received. Shutting down...`);
+    server.close(async () => {
+      try {
+        await sequelize.close();
+        console.log("✅ DB pool closed");
+      } catch (e) {
+        console.error("DB close error:", e);
+      }
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 15000);
+  };
 
-  /*
-  |--------------------------------------------------------------------------
-  | Email / SMTP
-  |--------------------------------------------------------------------------
-  */
-
-  const emailConfigured =
-    Boolean(
-      process.env.SMTP_HOST &&
-      process.env.SMTP_USER &&
-      process.env.SMTP_PASS,
-    );
-
-  if (emailConfigured) {
-    try {
-      await verifyEmailConnection();
-
-      console.log(
-        "✅ SMTP connected",
-      );
-
-      startEmailQueueWorker();
-    } catch (error) {
-      /*
-       * Email fail hone se
-       * poora backend band nahi hoga.
-       */
-      console.error(
-        "❌ SMTP connection failed:",
-        error?.message ||
-          error,
-      );
-    }
-  } else {
-    console.warn(
-      "⚠️ SMTP not configured. Email worker not started.",
-    );
-  }
-
-
-  /*
-  |--------------------------------------------------------------------------
-  | Start Server
-  |--------------------------------------------------------------------------
-  */
-
-  app.listen(
-    port,
-    () => {
-      console.log(
-        `🚀 RKNexora API running on port ${port}`,
-      );
-    },
-  );
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 } catch (error) {
-  console.error(
-    "❌ Startup failed:",
-    error,
-  );
-
+  console.error("❌ Startup failed:", error);
   process.exit(1);
 }
