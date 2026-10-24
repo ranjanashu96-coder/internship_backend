@@ -108,8 +108,17 @@ const getParams = (query) => {
   const fromDate = clean(query.from_date);
   const toDate = clean(query.to_date);
 
+  // 👇 NEW
+  const internshipStartFrom = clean(query.internship_start_from);
+  const internshipStartTo = clean(query.internship_start_to);
+
   if (fromDate && toDate && fromDate > toDate) {
     throw new AppError("From date cannot be after to date", 422);
+  }
+
+  // 👇 NEW
+  if (internshipStartFrom && internshipStartTo && internshipStartFrom > internshipStartTo) {
+    throw new AppError("Internship start from cannot be after start to", 422);
   }
 
   return {
@@ -125,6 +134,8 @@ const getParams = (query) => {
     paymentStatus: clean(query.payment_status),
     fromDate,
     toDate,
+    internshipStartFrom,   // 👈 NEW
+    internshipStartTo,     // 👈 NEW
   };
 };
 
@@ -157,6 +168,15 @@ const buildStudentWhere = (params) => {
     where.registration_date = {};
     if (params.fromDate) where.registration_date[Op.gte] = params.fromDate;
     if (params.toDate) where.registration_date[Op.lte] = params.toDate;
+  }
+
+  // 👇 NEW: internship start date filter (sab report types pe apply hoga)
+  if (params.internshipStartFrom || params.internshipStartTo) {
+    where.internship_start_date = {};
+    if (params.internshipStartFrom)
+      where.internship_start_date[Op.gte] = params.internshipStartFrom;
+    if (params.internshipStartTo)
+      where.internship_start_date[Op.lte] = params.internshipStartTo;
   }
 
   return where;
