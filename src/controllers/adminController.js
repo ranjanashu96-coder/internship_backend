@@ -825,6 +825,32 @@ if (entity === "students") {
       req.query.payment_status;
   }
 
+  if (req.query.internship_started) {
+  const internshipStarted = String(
+    req.query.internship_started,
+  )
+    .trim()
+    .toLowerCase();
+
+  if (
+    internshipStarted === "yes"
+  ) {
+    where.internship_start_date = {
+      [Op.ne]: null,
+    };
+  } else if (
+    internshipStarted === "no"
+  ) {
+    where.internship_start_date =
+      null;
+  } else {
+    throw new AppError(
+      "Invalid internship_started filter. Allowed values: yes, no",
+      422,
+    );
+  }
+}
+
   /*
   |--------------------------------------------------------------------------
   | Registration Date Filter
@@ -3192,16 +3218,11 @@ export const importStudents = asyncHandler(
 export const startStudentInternship =
   asyncHandler(
     async (req, res) => {
-      const studentId =
-        Number(
-          req.params.id,
-        );
+      const studentId = Number(req.params.id);
 
-      const startDate =
-        String(
-          req.body.start_date ||
-            "",
-        ).trim();
+      const startDate = String(
+        req.body.start_date || "",
+      ).trim();
 
       if (!studentId) {
         throw new AppError(
@@ -3217,21 +3238,14 @@ export const startStudentInternship =
         );
       }
 
-      if (
-        !/^\d{4}-\d{2}-\d{2}$/.test(
-          startDate,
-        )
-      ) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
         throw new AppError(
           "Invalid start date",
           422,
         );
       }
 
-      const student =
-        await Student.findByPk(
-          studentId,
-        );
+      const student = await Student.findByPk(studentId);
 
       if (!student) {
         throw new AppError(
@@ -3240,9 +3254,22 @@ export const startStudentInternship =
         );
       }
 
+      // ⛔ blocked => kabhi allowed nahi
+      if (student.internship_status === "blocked") {
+        throw new AppError(
+          "Blocked student cannot start internship",
+          409,
+        );
+      }
+
+      // ✅ active / completed => payment ka baawajood allowed
+      const isActiveOrCompleted =
+        student.internship_status === "active" ||
+        student.internship_status === "completed";
+
       if (
-        student.payment_status !==
-        "paid"
+        student.payment_status !== "paid" &&
+        !isActiveOrCompleted
       ) {
         throw new AppError(
           "Student has not completed payment",
@@ -3250,179 +3277,83 @@ export const startStudentInternship =
         );
       }
 
-      if (
-        student.internship_status ===
-        "blocked"
-      ) {
-        throw new AppError(
-          "Blocked student cannot start internship",
-          409,
+      const today = new Intl.DateTimeFormat(
+        "en-CA",
+        {
+          timeZone: "Asia/Kolkata",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        },
+      ).format(new Date());
+
+      const internshipStarted = startDate <= today;
+
+      await student.update({
+        internship_start_date: startDate,
+
+        // ✅ completed => completed hi rahe, warna active
+        internship_status:
+          student.internship_status === "completed"
+            ? "completed"
+            : "active",
+
+        learning_start_date: startDate,
+        attendance_start_date: startDate,
+        learning_access_enabled: internshipStarted,
+        attendance_access_enabled: internshipStarted,
+      });
+
+      const formattedStartDate =
+        new Intl.DateTimeFormat("en-IN", {
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+          timeZone: "Asia/Kolkata",
+        }).format(
+          new Date(`${startDate}T00:00:00+05:30`),
         );
-      }
 
-      if (
-        student.internship_status ===
-        "completed"
-      ) {
-        throw new AppError(
-          "Internship is already completed",
-          409,
-        );
-      }
-
-      const today =
-        new Intl.DateTimeFormat(
-          "en-CA",
-          {
-            timeZone:
-              "Asia/Kolkata",
-
-            year:
-              "numeric",
-
-            month:
-              "2-digit",
-
-            day:
-              "2-digit",
+      try {
+        await notify({
+          recipientType: "student",
+          recipientId: student.id,
+          type: "internship",
+          title: internshipStarted
+            ? "Internship Started"
+            : "Internship Scheduled",
+          message: internshipStarted
+            ? `Your internship has started from ${formattedStartDate}. Learning and attendance are now available.`
+            : `Your internship is scheduled to start on ${formattedStartDate}. Learning and attendance will become available from this date.`,
+          actionUrl: "/student",
+          metadata: {
+            student_id: student.id,
+            start_date: startDate,
+            internship_status: student.internship_status,
           },
-        ).format(
-          new Date(),
+          email: student.email,
+          recipientName: student.name,
+          sendEmail: Boolean(student.email),
+          emailSubject: internshipStarted
+            ? "Your RK Nexora Internship Has Started"
+            : "Your RK Nexora Internship Start Date",
+        });
+      } catch (notificationError) {
+        console.error(
+          "Internship notification failed:",
+          notificationError,
         );
-
-     const internshipStarted =
-  startDate <= today;
-
-await student.update({
-  internship_start_date:
-    startDate,
-
-  /*
-   * Payment complete hone ke baad
-   * student active hi rahega.
-   *
-   * Future internship date dene par
-   * active -> registered nahi hoga.
-   */
-  internship_status:
-    "active",
-
-  /*
-   * Learning aur attendance
-   * isi date se start honge.
-   */
-  learning_start_date:
-    startDate,
-
-  attendance_start_date:
-    startDate,
-
-  /*
-   * Today/past date hai:
-   * immediately unlock.
-   *
-   * Future date hai:
-   * abhi locked.
-   */
-  learning_access_enabled:
-    internshipStarted,
-
-  attendance_access_enabled:
-    internshipStarted,
-});
-
-const formattedStartDate =
-  new Intl.DateTimeFormat(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-      timeZone:
-        "Asia/Kolkata",
-    },
-  ).format(
-    new Date(
-      `${startDate}T00:00:00+05:30`,
-    ),
-  );
-
-try {
-  await notify({
-    recipientType:
-      "student",
-
-    recipientId:
-      student.id,
-
-    type:
-      "internship",
-
-    title:
-      internshipStarted
-        ? "Internship Started"
-        : "Internship Scheduled",
-
-    message:
-      internshipStarted
-        ? `Your internship has started from ${formattedStartDate}. Learning and attendance are now available.`
-        : `Your internship is scheduled to start on ${formattedStartDate}. Learning and attendance will become available from this date.`,
-
-    actionUrl:
-      "/student",
-
-    metadata: {
-      student_id:
-        student.id,
-
-      start_date:
-        startDate,
-
-      internship_status:
-        student.internship_status,
-    },
-
-    email:
-      student.email,
-
-    recipientName:
-      student.name,
-
-    sendEmail:
-      Boolean(
-        student.email,
-      ),
-
-    emailSubject:
-      internshipStarted
-        ? "Your RK Nexora Internship Has Started"
-        : "Your RK Nexora Internship Start Date",
-  });
-} catch (notificationError) {
-  console.error(
-    "Internship notification failed:",
-    notificationError,
-  );
-}
+      }
 
       return ok(
         res,
         {
-          student_id:
-            student.id,
-
-          name:
-            student.name,
-
+          student_id: student.id,
+          name: student.name,
           portal_registration_number:
             student.portal_registration_number,
-
-          payment_status:
-            student.payment_status,
-
-          internship_status:
-            student.internship_status,
-
+          payment_status: student.payment_status,
+          internship_status: student.internship_status,
           internship_start_date:
             student.internship_start_date,
         },
@@ -3432,7 +3363,6 @@ try {
       );
     },
   );
-
 /*
 |--------------------------------------------------------------------------
 | Start Multiple Student Internships
@@ -3458,7 +3388,10 @@ export const startStudentInternshipsBulk = asyncHandler(
     }
 
     if (studentIds.length > 500) {
-      throw new AppError("Maximum 500 students can be started at once", 422);
+      throw new AppError(
+        "Maximum 500 students can be started at once",
+        422,
+      );
     }
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
@@ -3469,13 +3402,17 @@ export const startStudentInternshipsBulk = asyncHandler(
       where: { id: { [Op.in]: studentIds } },
     });
 
-    const studentMap = new Map(students.map((student) => [Number(student.id), student]));
+    const studentMap = new Map(
+      students.map((student) => [Number(student.id), student]),
+    );
+
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Kolkata",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     }).format(new Date());
+
     const internshipStarted = startDate <= today;
     const startedIds = [];
     const errors = [];
@@ -3484,11 +3421,32 @@ export const startStudentInternshipsBulk = asyncHandler(
       const student = studentMap.get(studentId);
 
       if (!student) {
-        errors.push({ student_id: studentId, message: "Student not found" });
+        errors.push({
+          student_id: studentId,
+          message: "Student not found",
+        });
         continue;
       }
 
-      if (student.payment_status !== "paid") {
+      // ⛔ sirf blocked ko block karo
+      if (student.internship_status === "blocked") {
+        errors.push({
+          student_id: studentId,
+          name: student.name,
+          message: "Internship is blocked",
+        });
+        continue;
+      }
+
+      // ✅ active / completed => payment ka baawajood allowed
+      const isActiveOrCompleted =
+        student.internship_status === "active" ||
+        student.internship_status === "completed";
+
+      if (
+        student.payment_status !== "paid" &&
+        !isActiveOrCompleted
+      ) {
         errors.push({
           student_id: studentId,
           name: student.name,
@@ -3497,18 +3455,15 @@ export const startStudentInternshipsBulk = asyncHandler(
         continue;
       }
 
-      if (["blocked", "completed"].includes(student.internship_status)) {
-        errors.push({
-          student_id: studentId,
-          name: student.name,
-          message: `Internship is ${student.internship_status}`,
-        });
-        continue;
-      }
-
       await student.update({
         internship_start_date: startDate,
-        internship_status: "active",
+
+        // ✅ completed => completed hi rahe
+        internship_status:
+          student.internship_status === "completed"
+            ? "completed"
+            : "active",
+
         learning_start_date: startDate,
         attendance_start_date: startDate,
         learning_access_enabled: internshipStarted,
@@ -3522,12 +3477,17 @@ export const startStudentInternshipsBulk = asyncHandler(
           recipientType: "student",
           recipientId: student.id,
           type: "internship",
-          title: internshipStarted ? "Internship Started" : "Internship Scheduled",
+          title: internshipStarted
+            ? "Internship Started"
+            : "Internship Scheduled",
           message: internshipStarted
             ? `Your internship has started from ${startDate}. Learning and attendance are now available.`
             : `Your internship is scheduled to start on ${startDate}. Learning and attendance will become available from this date.`,
           actionUrl: "/student",
-          metadata: { student_id: student.id, start_date: startDate },
+          metadata: {
+            student_id: student.id,
+            start_date: startDate,
+          },
           email: student.email,
           recipientName: student.name,
           sendEmail: Boolean(student.email),
@@ -3536,7 +3496,10 @@ export const startStudentInternshipsBulk = asyncHandler(
             : "Your RK Nexora Internship Start Date",
         });
       } catch (notificationError) {
-        console.error("Bulk internship notification failed:", notificationError);
+        console.error(
+          "Bulk internship notification failed:",
+          notificationError,
+        );
       }
     }
 
