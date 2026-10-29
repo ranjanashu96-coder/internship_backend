@@ -187,7 +187,7 @@ export const consentLetterTemplate = ({
           <td>${escapeHtml(collegeRegistrationNumber)}</td>
         </tr>
         <tr>
-          <td>University Roll Number</td>
+          <td>University Form Number /Roll No.</td>
           <td>${escapeHtml(student.student_id || student.registration_number || "-")}</td>
         </tr>
         <tr>
